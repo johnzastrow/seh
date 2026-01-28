@@ -5,9 +5,12 @@ Download your data from SolarEdge monitoring servers and store it in a relationa
 ## Features
 
 - **Multi-database support**: SQLite (default), PostgreSQL, and MariaDB
+- **Comprehensive data sync**: Sites, equipment, energy, power, batteries, meters, alerts, inventory, and inverter telemetry
 - **Incremental sync**: Only fetches new data since last sync with configurable overlap buffer
 - **Rate limiting**: Complies with SolarEdge API limits (3 concurrent requests, 300/day)
 - **Retry with backoff**: Automatic retries with exponential backoff on transient failures
+- **Data export**: Export to CSV or JSON with filtering options
+- **Database views**: Pre-built views for common queries
 - **Structured logging**: JSON logging with optional file rotation via structlog
 - **CLI interface**: Rich terminal output with progress tables and status displays
 - **Idempotent operations**: Upsert pattern ensures safe re-runs without duplicates
@@ -86,6 +89,9 @@ SEH_DATABASE_URL=sqlite:///./seh.db
 # PostgreSQL
 SEH_DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/seh
 
+# PostgreSQL with custom schema (note: '=' is URL-encoded as '%3D')
+SEH_DATABASE_URL=postgresql+psycopg://user:password@localhost:5432/seh?options=-csearch_path%3Dmy_schema
+
 # MariaDB
 SEH_DATABASE_URL=mariadb+mariadbconnector://user:password@localhost:3306/seh
 ```
@@ -134,6 +140,42 @@ Show sync status for all sites in the database.
 uv run seh status
 ```
 
+### `seh export`
+
+Export data to CSV or JSON files.
+
+```bash
+# Export site information
+uv run seh export sites
+uv run seh export sites --format json -o sites.json
+
+# Export energy readings
+uv run seh export energy
+uv run seh export energy --site 12345 --start 2024-01-01 --end 2024-12-31
+
+# Export power readings
+uv run seh export power --format json
+
+# Export equipment list
+uv run seh export equipment
+
+# Export inverter telemetry
+uv run seh export telemetry --site 12345 --serial ABC123
+
+# Export inventory
+uv run seh export inventory
+
+# Export environmental benefits
+uv run seh export environmental
+```
+
+**Export options:**
+- `--format`, `-f`: Output format (`csv` or `json`, default: `csv`)
+- `--output`, `-o`: Output file path (auto-generates if not specified)
+- `--site`, `-s`: Filter by site ID
+- `--start`, `--end`: Date range filtering (for time-series data)
+- `--serial`: Filter by serial number (telemetry only)
+
 ### Global Options
 
 ```bash
@@ -159,7 +201,28 @@ uv run seh sync --help
 | `power_flows` | Current power flow snapshots (PV, grid, load, storage) |
 | `meters` | Meter devices (production, consumption, etc.) |
 | `meter_readings` | Meter time-series data with voltage, current, power factor |
+| `alerts` | System alerts with severity, codes, and affected components |
+| `environmental_benefits` | CO2/SO2/NOx savings, trees planted equivalent |
+| `inventory` | Complete equipment inventory by category |
+| `inverter_telemetry` | Detailed inverter data (voltage, current, temperature, mode) |
 | `sync_metadata` | Tracks last sync time per site and data type |
+
+### Database Views
+
+Pre-built views for common queries:
+
+| View | Description |
+|------|-------------|
+| `v_site_summary` | Simplified site information |
+| `v_daily_energy` | Daily energy with kWh conversion |
+| `v_latest_power` | Most recent power reading per site |
+| `v_power_flow_current` | Latest power flow snapshot per site |
+| `v_sync_status` | Current sync status for all sites |
+| `v_equipment_list` | Equipment with site names |
+| `v_battery_status` | Current battery status |
+| `v_energy_monthly` | Monthly energy totals |
+
+See [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) for complete schema documentation.
 
 ### Sync Strategy
 
@@ -178,6 +241,10 @@ uv run seh sync --help
    - Power readings + current power flow
    - Storage/battery data
    - Meter devices and readings
+   - Environmental benefits
+   - Alerts
+   - Inventory
+   - Inverter telemetry
 
 ## Scheduled Sync
 
@@ -209,7 +276,8 @@ src/seh/
 ├── db/
 │   ├── base.py              # SQLAlchemy DeclarativeBase
 │   ├── engine.py            # Engine factory for SQLite/PG/MariaDB
-│   ├── models/              # ORM models (9 tables)
+│   ├── views.py             # Database view definitions
+│   ├── models/              # ORM models (13 tables)
 │   └── repositories/        # CRUD with upsert support
 ├── sync/
 │   ├── orchestrator.py      # Coordinates sync across sites
@@ -290,15 +358,19 @@ uv sync --extra mariadb
 
 See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items remaining:
 
-- [ ] Database views for simplified querying
-- [ ] Inverter telemetry data sync
 - [ ] Optimizer-level data sync
-- [ ] Environmental benefits data
-- [ ] Alerts and notifications from API
 - [ ] Web scraping for additional data not in API
 - [ ] Unit and integration tests
-- [ ] Data export functionality (CSV, JSON)
 - [ ] Grafana/dashboard integration examples
+
+### Recently Completed
+
+- [x] Database views for simplified querying (8 views)
+- [x] Inverter telemetry data sync
+- [x] Environmental benefits data
+- [x] Alerts sync (with graceful handling for restricted API access)
+- [x] Inventory sync
+- [x] Data export functionality (CSV, JSON)
 
 ## License
 
