@@ -1,6 +1,7 @@
 """Equipment repository."""
 
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -47,18 +48,22 @@ class EquipmentRepository(BaseRepository[Equipment]):
             The upserted equipment.
         """
         dialect = self.session.bind.dialect.name if self.session.bind else "sqlite"
+        update_set = {k: v for k, v in equipment_data.items() if k != "serial_number"}
 
         if dialect == "postgresql":
             stmt = pg_insert(Equipment).values(**equipment_data)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["serial_number"],
-                set_={k: v for k, v in equipment_data.items() if k != "serial_number"},
+                set_=update_set,
             )
+        elif dialect in ("mysql", "mariadb"):
+            stmt = mysql_insert(Equipment).values(**equipment_data)
+            stmt = stmt.on_duplicate_key_update(**update_set)
         else:
             stmt = sqlite_insert(Equipment).values(**equipment_data)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["serial_number"],
-                set_={k: v for k, v in equipment_data.items() if k != "serial_number"},
+                set_=update_set,
             )
 
         self.session.execute(stmt)

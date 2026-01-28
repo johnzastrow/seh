@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -73,17 +74,22 @@ class PowerRepository(BaseRepository[PowerReading]):
         dialect = self.session.bind.dialect.name if self.session.bind else "sqlite"
 
         for reading in readings:
+            update_set = {"power_watts": reading.get("power_watts")}
+
             if dialect == "postgresql":
                 stmt = pg_insert(PowerReading).values(**reading)
                 stmt = stmt.on_conflict_do_update(
                     constraint="uq_power_reading",
-                    set_={"power_watts": reading.get("power_watts")},
+                    set_=update_set,
                 )
+            elif dialect in ("mysql", "mariadb"):
+                stmt = mysql_insert(PowerReading).values(**reading)
+                stmt = stmt.on_duplicate_key_update(**update_set)
             else:
                 stmt = sqlite_insert(PowerReading).values(**reading)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["site_id", "timestamp"],
-                    set_={"power_watts": reading.get("power_watts")},
+                    set_=update_set,
                 )
             self.session.execute(stmt)
 
@@ -158,6 +164,9 @@ class PowerFlowRepository(BaseRepository[PowerFlow]):
                 constraint="uq_power_flow",
                 set_=update_set,
             )
+        elif dialect in ("mysql", "mariadb"):
+            stmt = mysql_insert(PowerFlow).values(**flow_data)
+            stmt = stmt.on_duplicate_key_update(**update_set)
         else:
             stmt = sqlite_insert(PowerFlow).values(**flow_data)
             stmt = stmt.on_conflict_do_update(

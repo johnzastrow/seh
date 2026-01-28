@@ -3,6 +3,7 @@
 from datetime import date
 
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -82,17 +83,22 @@ class EnergyRepository(BaseRepository[EnergyReading]):
         dialect = self.session.bind.dialect.name if self.session.bind else "sqlite"
 
         for reading in readings:
+            update_set = {"energy_wh": reading.get("energy_wh")}
+
             if dialect == "postgresql":
                 stmt = pg_insert(EnergyReading).values(**reading)
                 stmt = stmt.on_conflict_do_update(
                     constraint="uq_energy_reading",
-                    set_={"energy_wh": reading.get("energy_wh")},
+                    set_=update_set,
                 )
+            elif dialect in ("mysql", "mariadb"):
+                stmt = mysql_insert(EnergyReading).values(**reading)
+                stmt = stmt.on_duplicate_key_update(**update_set)
             else:
                 stmt = sqlite_insert(EnergyReading).values(**reading)
                 stmt = stmt.on_conflict_do_update(
                     index_elements=["site_id", "reading_date", "time_unit"],
-                    set_={"energy_wh": reading.get("energy_wh")},
+                    set_=update_set,
                 )
             self.session.execute(stmt)
 

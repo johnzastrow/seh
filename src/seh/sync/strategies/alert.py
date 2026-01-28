@@ -59,9 +59,10 @@ class AlertSyncStrategy(BaseSyncStrategy):
                     "alert_id": alert_id,
                     "severity": alert.get("severity"),
                     "alert_code": alert.get("alertCode"),
-                    "alert_message": alert.get("message"),
-                    "component_name": alert.get("componentName"),
-                    "component_serial": alert.get("componentSerialNumber"),
+                    "alert_type": alert.get("alertType"),
+                    "name": alert.get("componentName"),
+                    "description": alert.get("message"),
+                    "serial_number": alert.get("componentSerialNumber"),
                     "alert_timestamp": alert_timestamp,
                 }
 

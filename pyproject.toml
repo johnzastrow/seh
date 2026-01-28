@@ -97,3 +97,10 @@ warn_unused_configs = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests requiring real database",
+    "postgresql: marks tests specific to PostgreSQL",
+    "mariadb: marks tests specific to MariaDB",
+    "sqlite: marks tests specific to SQLite",
+]

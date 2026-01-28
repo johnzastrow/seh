@@ -1,6 +1,7 @@
 """Site repository."""
 
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -33,19 +34,23 @@ class SiteRepository(BaseRepository[Site]):
         """
         # Determine dialect and use appropriate insert
         dialect = self.session.bind.dialect.name if self.session.bind else "sqlite"
+        update_set = {k: v for k, v in site_data.items() if k != "id"}
 
         if dialect == "postgresql":
             stmt = pg_insert(Site).values(**site_data)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["id"],
-                set_={k: v for k, v in site_data.items() if k != "id"},
+                set_=update_set,
             )
+        elif dialect in ("mysql", "mariadb"):
+            stmt = mysql_insert(Site).values(**site_data)
+            stmt = stmt.on_duplicate_key_update(**update_set)
         else:
-            # SQLite and MariaDB
+            # SQLite
             stmt = sqlite_insert(Site).values(**site_data)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["id"],
-                set_={k: v for k, v in site_data.items() if k != "id"},
+                set_=update_set,
             )
 
         self.session.execute(stmt)

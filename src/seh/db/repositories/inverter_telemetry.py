@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from sqlalchemy import select
+from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
@@ -95,6 +96,9 @@ class InverterTelemetryRepository(BaseRepository[InverterTelemetry]):
                 constraint="uq_inverter_telemetry",
                 set_=update_set,
             )
+        elif dialect in ("mysql", "mariadb"):
+            stmt = mysql_insert(InverterTelemetry).values(**data)
+            stmt = stmt.on_duplicate_key_update(**update_set)
         else:
             stmt = sqlite_insert(InverterTelemetry).values(**data)
             stmt = stmt.on_conflict_do_update(
