@@ -70,6 +70,18 @@ class Site(Base, TimestampMixin):
     sync_metadata: Mapped[list["SyncMetadata"]] = relationship(  # type: ignore[name-defined] # noqa: F821
         "SyncMetadata", back_populates="site", cascade="all, delete-orphan"
     )
+    alerts: Mapped[list["Alert"]] = relationship(  # type: ignore[name-defined] # noqa: F821
+        "Alert", back_populates="site", cascade="all, delete-orphan"
+    )
+    environmental_benefits: Mapped[list["EnvironmentalBenefits"]] = relationship(  # type: ignore[name-defined] # noqa: F821
+        "EnvironmentalBenefits", back_populates="site", cascade="all, delete-orphan"
+    )
+    inventory: Mapped[list["InventoryItem"]] = relationship(  # type: ignore[name-defined] # noqa: F821
+        "InventoryItem", back_populates="site", cascade="all, delete-orphan"
+    )
+    inverter_telemetry: Mapped[list["InverterTelemetry"]] = relationship(  # type: ignore[name-defined] # noqa: F821
+        "InverterTelemetry", back_populates="site", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Site(id={self.id}, name='{self.name}')>"

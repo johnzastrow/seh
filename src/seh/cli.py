@@ -72,9 +72,10 @@ def cli(ctx: click.Context, config: str | None) -> None:
 @cli.command()
 @click.pass_context
 def init_db(ctx: click.Context) -> None:
-    """Initialize the database schema."""
+    """Initialize the database schema and views."""
     from seh.config.logging import get_logger
     from seh.db.engine import create_engine, create_tables
+    from seh.db.views import create_views
 
     settings = load_settings(ctx.obj.get("config_path"))
     logger = get_logger(__name__)
@@ -84,6 +85,11 @@ def init_db(ctx: click.Context) -> None:
     try:
         engine = create_engine(settings)
         create_tables(engine)
+        console.print("  Tables created")
+
+        create_views(engine)
+        console.print("  Views created")
+
         console.print("[green]Database initialized successfully![/green]")
         logger.info("Database initialized", url=settings.database_url)
     except Exception as e:

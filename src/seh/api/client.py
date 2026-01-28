@@ -377,6 +377,51 @@ class SolarEdgeClient:
         )
         return data.get("meterEnergyDetails", {})
 
+    # Environmental benefits endpoints
+
+    async def get_environmental_benefits(self, site_id: int) -> dict[str, Any]:
+        """Get environmental benefits data for a site.
+
+        Args:
+            site_id: Site ID.
+
+        Returns:
+            Environmental benefits dictionary with CO2 saved, trees planted, etc.
+        """
+        data = await self._request("GET", f"/site/{site_id}/envBenefits")
+        return data.get("envBenefits", {})
+
+    # Alert endpoints
+
+    async def get_alerts(self, site_id: int) -> list[dict[str, Any]]:
+        """Get alerts for a site.
+
+        Args:
+            site_id: Site ID.
+
+        Returns:
+            List of alert dictionaries.
+        """
+        data = await self._request("GET", f"/site/{site_id}/alerts")
+        alerts = data.get("alerts", {}).get("alert", [])
+        if isinstance(alerts, dict):
+            alerts = [alerts]
+        return alerts
+
+    # Inventory endpoints
+
+    async def get_inventory(self, site_id: int) -> dict[str, Any]:
+        """Get inventory for a site.
+
+        Args:
+            site_id: Site ID.
+
+        Returns:
+            Inventory dictionary with inverters, optimizers, etc.
+        """
+        data = await self._request("GET", f"/site/{site_id}/inventory")
+        return data.get("Inventory", {})
+
     # Utility methods
 
     @property
