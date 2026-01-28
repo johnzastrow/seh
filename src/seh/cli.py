@@ -1,8 +1,12 @@
 """Command-line interface for SolarEdge Harvest."""
 
 import asyncio
+import csv
+import json
 import os
-from datetime import datetime
+import sys
+from datetime import datetime, date
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -316,6 +320,348 @@ def status(ctx: click.Context) -> None:
         console.print(f"[red]Failed to get status:[/red] {e}")
         logger.error("Status check failed", error=str(e))
         raise SystemExit(1) from None
+
+
+@cli.group()
+@click.pass_context
+def export(ctx: click.Context) -> None:
+    """Export data to CSV or JSON files."""
+    pass
+
+
+def write_output(data: list[dict], output: str | None, format: str, name: str) -> None:
+    """Write data to file or stdout.
+
+    Args:
+        data: List of dictionaries to export.
+        output: Output file path or None for auto-generated.
+        format: Output format (csv or json).
+        name: Data name for auto-generated filename.
+    """
+    if not data:
+        console.print("[yellow]No data to export.[/yellow]")
+        return
+
+    # Generate filename if not provided
+    if output is None:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output = f"seh_{name}_{timestamp}.{format}"
+
+    # Convert datetime objects to strings
+    for row in data:
+        for key, value in row.items():
+            if isinstance(value, (datetime, date)):
+                row[key] = value.isoformat()
+
+    if format == "json":
+        with open(output, "w") as f:
+            json.dump(data, f, indent=2, default=str)
+    else:  # csv
+        if data:
+            with open(output, "w", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=data[0].keys())
+                writer.writeheader()
+                writer.writerows(data)
+
+    console.print(f"[green]Exported {len(data)} records to {output}[/green]")
+
+
+@export.command("sites")
+@click.option("--format", "-f", type=click.Choice(["csv", "json"]), default="csv", help="Output format")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.pass_context
+def export_sites(ctx: click.Context, format: str, output: str | None) -> None:
+    """Export site information."""
+    from seh.db.engine import create_engine, get_session
+    from seh.db.repositories.site import SiteRepository
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    engine = create_engine(settings)
+
+    with get_session(engine) as session:
+        repo = SiteRepository(session)
+        sites = repo.get_all()
+
+        data = []
+        for site in sites:
+            data.append({
+                "id": site.id,
+                "name": site.name,
+                "status": site.status,
+                "peak_power": site.peak_power,
+                "city": site.city,
+                "state": site.state,
+                "country": site.country,
+                "timezone": site.timezone,
+                "installation_date": site.installation_date,
+                "last_update_time": site.last_update_time,
+                "primary_module_manufacturer": site.primary_module_manufacturer,
+                "primary_module_model": site.primary_module_model,
+            })
+
+        write_output(data, output, format, "sites")
+
+
+@export.command("energy")
+@click.option("--format", "-f", type=click.Choice(["csv", "json"]), default="csv", help="Output format")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--site", "-s", "site_id", type=int, help="Filter by site ID")
+@click.option("--start", type=click.DateTime(), help="Start date (YYYY-MM-DD)")
+@click.option("--end", type=click.DateTime(), help="End date (YYYY-MM-DD)")
+@click.pass_context
+def export_energy(ctx: click.Context, format: str, output: str | None, site_id: int | None, start: datetime | None, end: datetime | None) -> None:
+    """Export energy readings."""
+    from sqlalchemy import select
+    from seh.db.engine import create_engine, get_session
+    from seh.db.models.energy import EnergyReading
+    from seh.db.models.site import Site
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    engine = create_engine(settings)
+
+    with get_session(engine) as session:
+        stmt = select(EnergyReading, Site.name).join(Site)
+
+        if site_id:
+            stmt = stmt.where(EnergyReading.site_id == site_id)
+        if start:
+            stmt = stmt.where(EnergyReading.reading_date >= start.date())
+        if end:
+            stmt = stmt.where(EnergyReading.reading_date <= end.date())
+
+        stmt = stmt.order_by(EnergyReading.site_id, EnergyReading.reading_date)
+        results = session.execute(stmt).all()
+
+        data = []
+        for reading, site_name in results:
+            data.append({
+                "site_id": reading.site_id,
+                "site_name": site_name,
+                "reading_date": reading.reading_date,
+                "time_unit": reading.time_unit,
+                "energy_wh": reading.energy_wh,
+                "energy_kwh": round(reading.energy_wh / 1000, 2) if reading.energy_wh else None,
+            })
+
+        write_output(data, output, format, "energy")
+
+
+@export.command("power")
+@click.option("--format", "-f", type=click.Choice(["csv", "json"]), default="csv", help="Output format")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--site", "-s", "site_id", type=int, help="Filter by site ID")
+@click.option("--start", type=click.DateTime(), help="Start datetime (YYYY-MM-DD HH:MM:SS)")
+@click.option("--end", type=click.DateTime(), help="End datetime (YYYY-MM-DD HH:MM:SS)")
+@click.pass_context
+def export_power(ctx: click.Context, format: str, output: str | None, site_id: int | None, start: datetime | None, end: datetime | None) -> None:
+    """Export power readings."""
+    from sqlalchemy import select
+    from seh.db.engine import create_engine, get_session
+    from seh.db.models.power import PowerReading
+    from seh.db.models.site import Site
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    engine = create_engine(settings)
+
+    with get_session(engine) as session:
+        stmt = select(PowerReading, Site.name).join(Site)
+
+        if site_id:
+            stmt = stmt.where(PowerReading.site_id == site_id)
+        if start:
+            stmt = stmt.where(PowerReading.timestamp >= start)
+        if end:
+            stmt = stmt.where(PowerReading.timestamp <= end)
+
+        stmt = stmt.order_by(PowerReading.site_id, PowerReading.timestamp)
+        results = session.execute(stmt).all()
+
+        data = []
+        for reading, site_name in results:
+            data.append({
+                "site_id": reading.site_id,
+                "site_name": site_name,
+                "timestamp": reading.timestamp,
+                "power_watts": reading.power_watts,
+                "power_kw": round(reading.power_watts / 1000, 2) if reading.power_watts else None,
+            })
+
+        write_output(data, output, format, "power")
+
+
+@export.command("equipment")
+@click.option("--format", "-f", type=click.Choice(["csv", "json"]), default="csv", help="Output format")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--site", "-s", "site_id", type=int, help="Filter by site ID")
+@click.pass_context
+def export_equipment(ctx: click.Context, format: str, output: str | None, site_id: int | None) -> None:
+    """Export equipment list."""
+    from sqlalchemy import select
+    from seh.db.engine import create_engine, get_session
+    from seh.db.models.equipment import Equipment
+    from seh.db.models.site import Site
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    engine = create_engine(settings)
+
+    with get_session(engine) as session:
+        stmt = select(Equipment, Site.name).join(Site)
+
+        if site_id:
+            stmt = stmt.where(Equipment.site_id == site_id)
+
+        stmt = stmt.order_by(Equipment.site_id, Equipment.equipment_type, Equipment.name)
+        results = session.execute(stmt).all()
+
+        data = []
+        for equip, site_name in results:
+            data.append({
+                "site_id": equip.site_id,
+                "site_name": site_name,
+                "serial_number": equip.serial_number,
+                "name": equip.name,
+                "manufacturer": equip.manufacturer,
+                "model": equip.model,
+                "equipment_type": equip.equipment_type,
+                "cpu_version": equip.cpu_version,
+                "connected_optimizers": equip.connected_optimizers,
+                "last_report_date": equip.last_report_date,
+            })
+
+        write_output(data, output, format, "equipment")
+
+
+@export.command("telemetry")
+@click.option("--format", "-f", type=click.Choice(["csv", "json"]), default="csv", help="Output format")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--site", "-s", "site_id", type=int, help="Filter by site ID")
+@click.option("--serial", type=str, help="Filter by inverter serial number")
+@click.option("--start", type=click.DateTime(), help="Start datetime (YYYY-MM-DD HH:MM:SS)")
+@click.option("--end", type=click.DateTime(), help="End datetime (YYYY-MM-DD HH:MM:SS)")
+@click.pass_context
+def export_telemetry(ctx: click.Context, format: str, output: str | None, site_id: int | None, serial: str | None, start: datetime | None, end: datetime | None) -> None:
+    """Export inverter telemetry data."""
+    from sqlalchemy import select
+    from seh.db.engine import create_engine, get_session
+    from seh.db.models.inverter_telemetry import InverterTelemetry
+    from seh.db.models.site import Site
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    engine = create_engine(settings)
+
+    with get_session(engine) as session:
+        stmt = select(InverterTelemetry, Site.name).join(Site)
+
+        if site_id:
+            stmt = stmt.where(InverterTelemetry.site_id == site_id)
+        if serial:
+            stmt = stmt.where(InverterTelemetry.serial_number == serial)
+        if start:
+            stmt = stmt.where(InverterTelemetry.timestamp >= start)
+        if end:
+            stmt = stmt.where(InverterTelemetry.timestamp <= end)
+
+        stmt = stmt.order_by(InverterTelemetry.site_id, InverterTelemetry.serial_number, InverterTelemetry.timestamp)
+        results = session.execute(stmt).all()
+
+        data = []
+        for telem, site_name in results:
+            data.append({
+                "site_id": telem.site_id,
+                "site_name": site_name,
+                "serial_number": telem.serial_number,
+                "timestamp": telem.timestamp,
+                "total_active_power": telem.total_active_power,
+                "total_energy": telem.total_energy,
+                "temperature": telem.temperature,
+                "inverter_mode": telem.inverter_mode,
+                "ac_voltage": telem.ac_voltage,
+                "ac_current": telem.ac_current,
+                "ac_frequency": telem.ac_frequency,
+                "power_limit": telem.power_limit,
+            })
+
+        write_output(data, output, format, "telemetry")
+
+
+@export.command("inventory")
+@click.option("--format", "-f", type=click.Choice(["csv", "json"]), default="csv", help="Output format")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--site", "-s", "site_id", type=int, help="Filter by site ID")
+@click.pass_context
+def export_inventory(ctx: click.Context, format: str, output: str | None, site_id: int | None) -> None:
+    """Export inventory items."""
+    from sqlalchemy import select
+    from seh.db.engine import create_engine, get_session
+    from seh.db.models.inventory import InventoryItem
+    from seh.db.models.site import Site
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    engine = create_engine(settings)
+
+    with get_session(engine) as session:
+        stmt = select(InventoryItem, Site.name).join(Site)
+
+        if site_id:
+            stmt = stmt.where(InventoryItem.site_id == site_id)
+
+        stmt = stmt.order_by(InventoryItem.site_id, InventoryItem.category, InventoryItem.name)
+        results = session.execute(stmt).all()
+
+        data = []
+        for item, site_name in results:
+            data.append({
+                "site_id": item.site_id,
+                "site_name": site_name,
+                "name": item.name,
+                "category": item.category,
+                "manufacturer": item.manufacturer,
+                "model": item.model,
+                "serial_number": item.serial_number,
+                "firmware_version": item.firmware_version,
+            })
+
+        write_output(data, output, format, "inventory")
+
+
+@export.command("environmental")
+@click.option("--format", "-f", type=click.Choice(["csv", "json"]), default="csv", help="Output format")
+@click.option("--output", "-o", type=click.Path(), help="Output file path")
+@click.option("--site", "-s", "site_id", type=int, help="Filter by site ID")
+@click.pass_context
+def export_environmental(ctx: click.Context, format: str, output: str | None, site_id: int | None) -> None:
+    """Export environmental benefits."""
+    from sqlalchemy import select
+    from seh.db.engine import create_engine, get_session
+    from seh.db.models.environmental import EnvironmentalBenefits
+    from seh.db.models.site import Site
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    engine = create_engine(settings)
+
+    with get_session(engine) as session:
+        stmt = select(EnvironmentalBenefits, Site.name).join(Site)
+
+        if site_id:
+            stmt = stmt.where(EnvironmentalBenefits.site_id == site_id)
+
+        stmt = stmt.order_by(EnvironmentalBenefits.site_id)
+        results = session.execute(stmt).all()
+
+        data = []
+        for env, site_name in results:
+            data.append({
+                "site_id": env.site_id,
+                "site_name": site_name,
+                "co2_saved": env.co2_saved,
+                "so2_saved": env.so2_saved,
+                "nox_saved": env.nox_saved,
+                "co2_units": env.co2_units,
+                "trees_planted": env.trees_planted,
+                "light_bulbs": env.light_bulbs,
+            })
+
+        write_output(data, output, format, "environmental")
 
 
 if __name__ == "__main__":
