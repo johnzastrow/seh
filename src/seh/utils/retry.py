@@ -46,6 +46,11 @@ def retry_with_backoff(
                 except RateLimitError:
                     # Don't retry rate limit errors
                     raise
+                except APIError as e:
+                    # Don't retry client errors (4xx) - they won't succeed on retry
+                    if e.status_code and 400 <= e.status_code < 500:
+                        raise
+                    last_exception = e
                 except exceptions as e:
                     last_exception = e
 

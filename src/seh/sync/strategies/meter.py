@@ -6,6 +6,7 @@ import structlog
 
 from seh.db.repositories.meter import MeterReadingRepository, MeterRepository
 from seh.sync.strategies.base import BaseSyncStrategy
+from seh.utils.exceptions import APIError
 
 logger = structlog.get_logger(__name__)
 
@@ -29,7 +30,15 @@ class MeterSyncStrategy(BaseSyncStrategy):
 
         try:
             # First sync meter list
-            meters = await self.client.get_meters(site_id)
+            try:
+                meters = await self.client.get_meters(site_id)
+            except APIError as e:
+                # 400 errors typically mean no meters or feature not available
+                if e.status_code == 400:
+                    logger.info("Meters not available for site", site_id=site_id)
+                    self.update_sync_metadata(site_id, datetime.now(), 0)
+                    return 0
+                raise
 
             if not meters:
                 logger.info("No meters found", site_id=site_id)
