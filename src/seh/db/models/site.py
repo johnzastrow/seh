@@ -82,6 +82,9 @@ class Site(Base, TimestampMixin):
     inverter_telemetry: Mapped[list["InverterTelemetry"]] = relationship(  # type: ignore[name-defined] # noqa: F821
         "InverterTelemetry", back_populates="site", cascade="all, delete-orphan"
     )
+    optimizer_telemetry: Mapped[list["OptimizerTelemetry"]] = relationship(  # type: ignore[name-defined] # noqa: F821
+        "OptimizerTelemetry", back_populates="site", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<Site(id={self.id}, name='{self.name}')>"

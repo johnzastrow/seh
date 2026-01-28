@@ -17,6 +17,7 @@ from seh.sync.strategies.equipment import EquipmentSyncStrategy
 from seh.sync.strategies.inventory import InventorySyncStrategy
 from seh.sync.strategies.inverter_telemetry import InverterTelemetrySyncStrategy
 from seh.sync.strategies.meter import MeterSyncStrategy
+from seh.sync.strategies.optimizer_telemetry import OptimizerTelemetrySyncStrategy
 from seh.sync.strategies.power import PowerSyncStrategy
 from seh.sync.strategies.site import SiteSyncStrategy
 from seh.sync.strategies.storage import StorageSyncStrategy
@@ -160,6 +161,7 @@ class SyncOrchestrator:
                 AlertSyncStrategy(self.client, session, self.settings),
                 InventorySyncStrategy(self.client, session, self.settings),
                 InverterTelemetrySyncStrategy(self.client, session, self.settings),
+                OptimizerTelemetrySyncStrategy(self.client, session, self.settings),
             ]
 
             # Run each strategy

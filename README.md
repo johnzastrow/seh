@@ -205,6 +205,7 @@ uv run seh sync --help
 | `environmental_benefits` | CO2/SO2/NOx savings, trees planted equivalent |
 | `inventory` | Complete equipment inventory by category |
 | `inverter_telemetry` | Detailed inverter data (voltage, current, temperature, mode) |
+| `optimizer_telemetry` | Per-panel optimizer data (DC voltage, current, power, energy) |
 | `sync_metadata` | Tracks last sync time per site and data type |
 
 ### Database Views
@@ -245,6 +246,7 @@ See [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) for complete schema documentation
    - Alerts
    - Inventory
    - Inverter telemetry
+   - Optimizer telemetry
 
 ## Scheduled Sync
 
@@ -277,7 +279,7 @@ src/seh/
 │   ├── base.py              # SQLAlchemy DeclarativeBase
 │   ├── engine.py            # Engine factory for SQLite/PG/MariaDB
 │   ├── views.py             # Database view definitions
-│   ├── models/              # ORM models (13 tables)
+│   ├── models/              # ORM models (14 tables)
 │   └── repositories/        # CRUD with upsert support
 ├── sync/
 │   ├── orchestrator.py      # Coordinates sync across sites
@@ -358,7 +360,6 @@ uv sync --extra mariadb
 
 See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items remaining:
 
-- [ ] Optimizer-level data sync
 - [ ] Web scraping for additional data not in API
 - [ ] Unit and integration tests
 - [ ] Grafana/dashboard integration examples
@@ -367,6 +368,7 @@ See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items
 
 - [x] Database views for simplified querying (8 views)
 - [x] Inverter telemetry data sync
+- [x] Optimizer telemetry data sync
 - [x] Environmental benefits data
 - [x] Alerts sync (with graceful handling for restricted API access)
 - [x] Inventory sync

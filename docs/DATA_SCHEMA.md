@@ -391,6 +391,36 @@ Detailed inverter telemetry data at 5-minute intervals.
 
 ---
 
+### optimizer_telemetry
+
+Power optimizer telemetry data at 5-minute intervals.
+
+| Column | Type | Nullable | Description |
+|--------|------|----------|-------------|
+| `id` | INTEGER | No | Primary key (auto-increment) |
+| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `serial_number` | VARCHAR(50) | No | Optimizer serial number |
+| `inverter_serial` | VARCHAR(50) | Yes | Connected inverter serial |
+| `timestamp` | DATETIME | No | Reading timestamp |
+| `panel_id` | INTEGER | Yes | Panel position identifier |
+| `dc_voltage` | FLOAT | Yes | DC input voltage from panel |
+| `dc_current` | FLOAT | Yes | DC input current from panel |
+| `dc_power` | FLOAT | Yes | DC power from panel in Watts |
+| `output_voltage` | FLOAT | Yes | Output voltage to inverter |
+| `output_current` | FLOAT | Yes | Output current to inverter |
+| `output_power` | FLOAT | Yes | Output power to inverter in Watts |
+| `energy` | FLOAT | Yes | Energy produced in Wh |
+| `lifetime_energy` | FLOAT | Yes | Lifetime energy in Wh |
+| `temperature` | FLOAT | Yes | Optimizer temperature in Celsius |
+| `optimizer_mode` | VARCHAR(50) | Yes | Operating mode |
+| `created_at` | DATETIME | No | Record creation timestamp |
+| `updated_at` | DATETIME | No | Record update timestamp |
+
+**Unique Constraints:** `(site_id, serial_number, timestamp)`
+**Indexes:** `site_id`, `serial_number`, `inverter_serial`, `timestamp`
+
+---
+
 ### sync_metadata
 
 Tracks synchronization state for each data type per site.
@@ -422,6 +452,7 @@ Tracks synchronization state for each data type per site.
 - `alert` - Alerts
 - `inventory` - Inventory
 - `inverter_telemetry` - Inverter telemetry
+- `optimizer_telemetry` - Optimizer telemetry
 
 ---
 

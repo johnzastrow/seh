@@ -180,6 +180,34 @@ class SolarEdgeClient:
         )
         return data.get("data", {}).get("telemetries", [])
 
+    async def get_optimizer_data(
+        self,
+        site_id: int,
+        serial_number: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        """Get optimizer telemetry data.
+
+        Args:
+            site_id: Site ID.
+            serial_number: Optimizer serial number.
+            start_time: Start time.
+            end_time: End time.
+
+        Returns:
+            List of telemetry readings.
+        """
+        data = await self._request(
+            "GET",
+            f"/equipment/{site_id}/{serial_number}/data",
+            params={
+                "startTime": self._format_date(start_time),
+                "endTime": self._format_date(end_time),
+            },
+        )
+        return data.get("data", {}).get("telemetries", [])
+
     # Energy endpoints
 
     async def get_energy(

@@ -8,6 +8,7 @@ from seh.db.repositories.equipment import EquipmentRepository
 from seh.db.repositories.inventory import InventoryRepository
 from seh.db.repositories.inverter_telemetry import InverterTelemetryRepository
 from seh.db.repositories.meter import MeterRepository
+from seh.db.repositories.optimizer_telemetry import OptimizerTelemetryRepository
 from seh.db.repositories.power import PowerRepository
 from seh.db.repositories.site import SiteRepository
 from seh.db.repositories.sync_metadata import SyncMetadataRepository
@@ -21,6 +22,7 @@ __all__ = [
     "InventoryRepository",
     "InverterTelemetryRepository",
     "MeterRepository",
+    "OptimizerTelemetryRepository",
     "PowerRepository",
     "SiteRepository",
     "SyncMetadataRepository",
