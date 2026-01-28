@@ -176,6 +176,23 @@ VIEWS_POSTGRESQL = {
     """,
 }
 
+# MariaDB/MySQL-specific versions (uses DATE_FORMAT)
+VIEWS_MYSQL = {
+    "v_energy_monthly": """
+        CREATE VIEW v_energy_monthly AS
+        SELECT
+            site_id,
+            DATE_FORMAT(reading_date, '%Y-%m') AS month,
+            SUM(energy_wh) AS total_wh,
+            ROUND(SUM(energy_wh) / 1000.0, 2) AS total_kwh,
+            COUNT(*) AS days_with_data
+        FROM energy_readings
+        WHERE time_unit = 'DAY'
+        GROUP BY site_id, DATE_FORMAT(reading_date, '%Y-%m')
+        ORDER BY site_id, month DESC
+    """,
+}
+
 
 def create_views(engine: Engine) -> None:
     """Create database views for simplified querying.
@@ -187,9 +204,11 @@ def create_views(engine: Engine) -> None:
 
     with engine.connect() as conn:
         for view_name, view_sql in VIEWS.items():
-            # Use PostgreSQL-specific version if available
+            # Use database-specific version if available
             if dialect == "postgresql" and view_name in VIEWS_POSTGRESQL:
                 view_sql = VIEWS_POSTGRESQL[view_name]
+            elif dialect in ("mysql", "mariadb") and view_name in VIEWS_MYSQL:
+                view_sql = VIEWS_MYSQL[view_name]
 
             # Adjust syntax for different databases
             if dialect == "postgresql":
@@ -198,7 +217,7 @@ def create_views(engine: Engine) -> None:
                     "CREATE VIEW IF NOT EXISTS",
                     "CREATE OR REPLACE VIEW"
                 )
-            elif dialect == "mariadb" or dialect == "mysql":
+            elif dialect in ("mysql", "mariadb"):
                 # MariaDB/MySQL: drop and recreate
                 drop_sql = f"DROP VIEW IF EXISTS {view_name}"
                 conn.execute(text(drop_sql))
