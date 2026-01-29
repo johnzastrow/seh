@@ -446,6 +446,164 @@ class TestSQLiteSpecific:
             assert version is not None
 
 
+class TestUniqueConstraints:
+    """Test that unique constraints prevent duplicates."""
+
+    def test_energy_reading_unique_constraint(self, session, db_type):
+        """Test that duplicate energy readings are rejected."""
+        from sqlalchemy.exc import IntegrityError
+
+        site = Site(id=99950, name="Unique Constraint Test Site")
+        session.add(site)
+        session.flush()
+
+        # Insert first reading
+        reading1 = EnergyReading(
+            site_id=99950,
+            reading_date=date(2024, 1, 1),
+            time_unit="DAY",
+            energy_wh=1000.0,
+        )
+        session.add(reading1)
+        session.flush()
+
+        # Try to insert duplicate (same site_id, reading_date, time_unit)
+        reading2 = EnergyReading(
+            site_id=99950,
+            reading_date=date(2024, 1, 1),
+            time_unit="DAY",
+            energy_wh=2000.0,
+        )
+        session.add(reading2)
+
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+        session.rollback()
+
+    def test_power_reading_unique_constraint(self, session, db_type):
+        """Test that duplicate power readings are rejected."""
+        from sqlalchemy.exc import IntegrityError
+
+        site = Site(id=99951, name="Power Unique Test Site")
+        session.add(site)
+        session.flush()
+
+        ts = datetime(2024, 1, 15, 12, 0, 0)
+
+        # Insert first reading
+        reading1 = PowerReading(
+            site_id=99951,
+            timestamp=ts,
+            power_watts=5000.0,
+        )
+        session.add(reading1)
+        session.flush()
+
+        # Try to insert duplicate (same site_id, timestamp)
+        reading2 = PowerReading(
+            site_id=99951,
+            timestamp=ts,
+            power_watts=6000.0,
+        )
+        session.add(reading2)
+
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+        session.rollback()
+
+    def test_alert_unique_constraint(self, session, db_type):
+        """Test that duplicate alerts are rejected."""
+        from sqlalchemy.exc import IntegrityError
+
+        site = Site(id=99952, name="Alert Unique Test Site")
+        session.add(site)
+        session.flush()
+
+        # Insert first alert
+        alert1 = Alert(
+            site_id=99952,
+            alert_id=5001,
+            severity="HIGH",
+        )
+        session.add(alert1)
+        session.flush()
+
+        # Try to insert duplicate (same site_id, alert_id)
+        alert2 = Alert(
+            site_id=99952,
+            alert_id=5001,
+            severity="LOW",
+        )
+        session.add(alert2)
+
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+        session.rollback()
+
+    def test_equipment_serial_unique_constraint(self, session, db_type):
+        """Test that duplicate equipment serial numbers are rejected."""
+        from sqlalchemy.exc import IntegrityError
+
+        site = Site(id=99953, name="Equipment Unique Test Site")
+        session.add(site)
+        session.flush()
+
+        # Insert first equipment
+        eq1 = Equipment(
+            site_id=99953,
+            serial_number="UNIQUE-SN-001",
+            name="First Inverter",
+        )
+        session.add(eq1)
+        session.flush()
+
+        # Try to insert duplicate serial number
+        eq2 = Equipment(
+            site_id=99953,
+            serial_number="UNIQUE-SN-001",
+            name="Second Inverter",
+        )
+        session.add(eq2)
+
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+        session.rollback()
+
+    def test_sync_metadata_unique_constraint(self, session, db_type):
+        """Test that duplicate sync metadata entries are rejected."""
+        from sqlalchemy.exc import IntegrityError
+
+        site = Site(id=99954, name="Sync Unique Test Site")
+        session.add(site)
+        session.flush()
+
+        # Insert first metadata
+        meta1 = SyncMetadata(
+            site_id=99954,
+            data_type="energy",
+            last_sync_time=datetime(2024, 1, 15, 12, 0, 0),
+        )
+        session.add(meta1)
+        session.flush()
+
+        # Try to insert duplicate (same site_id, data_type)
+        meta2 = SyncMetadata(
+            site_id=99954,
+            data_type="energy",
+            last_sync_time=datetime(2024, 1, 16, 12, 0, 0),
+        )
+        session.add(meta2)
+
+        with pytest.raises(IntegrityError):
+            session.flush()
+
+        session.rollback()
+
+
 class TestCascadeDeletes:
     """Test cascade delete behavior across backends."""
 

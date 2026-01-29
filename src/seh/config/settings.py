@@ -34,6 +34,12 @@ class Settings(BaseSettings):
         description="Database connection URL",
     )
 
+    # Site Filtering
+    site_ids: str | None = Field(
+        default=None,
+        description="Comma-separated list of site IDs to sync (syncs all if not set)",
+    )
+
     # Sync Configuration
     energy_lookback_days: int = Field(
         default=365,
@@ -46,6 +52,24 @@ class Settings(BaseSettings):
     sync_overlap_minutes: int = Field(
         default=15,
         description="Overlap buffer in minutes for incremental syncs",
+    )
+    power_time_unit: Literal["QUARTER_OF_AN_HOUR", "HOUR", "DAY", "WEEK", "MONTH", "YEAR"] = Field(
+        default="QUARTER_OF_AN_HOUR",
+        description="Time unit for power data (QUARTER_OF_AN_HOUR is 15-min intervals)",
+    )
+
+    # Error Handling Configuration
+    error_handling: Literal["strict", "lenient", "skip"] = Field(
+        default="lenient",
+        description="Error handling mode: strict (fail on first error), lenient (log and continue), skip (silent skip)",
+    )
+    max_retries: int = Field(
+        default=3,
+        description="Maximum number of retries for failed API requests",
+    )
+    retry_delay: float = Field(
+        default=2.0,
+        description="Base delay in seconds between retries (uses exponential backoff)",
     )
 
     # Logging Configuration
@@ -65,6 +89,63 @@ class Settings(BaseSettings):
         default=5,
         description="Number of backup log files to keep",
     )
+
+    # Email Notification Configuration
+    smtp_enabled: bool = Field(
+        default=False,
+        description="Enable email notifications",
+    )
+    smtp_host: str = Field(
+        default="smtp.gmail.com",
+        description="SMTP server hostname",
+    )
+    smtp_port: int = Field(
+        default=587,
+        description="SMTP server port (587 for TLS, 465 for SSL)",
+    )
+    smtp_username: str | None = Field(
+        default=None,
+        description="SMTP authentication username",
+    )
+    smtp_password: SecretStr | None = Field(
+        default=None,
+        description="SMTP authentication password",
+    )
+    smtp_use_tls: bool = Field(
+        default=True,
+        description="Use TLS for SMTP connection",
+    )
+    smtp_from_email: str | None = Field(
+        default=None,
+        description="From email address for notifications",
+    )
+    smtp_to_emails: str | None = Field(
+        default=None,
+        description="Comma-separated list of recipient email addresses",
+    )
+    notify_on_error: bool = Field(
+        default=True,
+        description="Send email notification on sync errors",
+    )
+    notify_on_success: bool = Field(
+        default=False,
+        description="Send email notification on successful sync",
+    )
+
+    def get_site_ids_list(self) -> list[int] | None:
+        """Parse site_ids setting into a list of integers."""
+        if not self.site_ids:
+            return None
+        try:
+            return [int(s.strip()) for s in self.site_ids.split(",") if s.strip()]
+        except ValueError:
+            return None
+
+    def get_to_email_list(self) -> list[str]:
+        """Parse smtp_to_emails into a list of email addresses."""
+        if not self.smtp_to_emails:
+            return []
+        return [e.strip() for e in self.smtp_to_emails.split(",") if e.strip()]
 
 
 @lru_cache
