@@ -39,7 +39,7 @@ uv sync
 # For PostgreSQL support
 uv sync --extra postgresql
 
-# For MariaDB support (requires system libraries: libmariadb-dev)
+# For MariaDB support (requires system libraries: libmariadb-dev. First try `sudo apt install libmariadb3 libmariadb-dev` for ubuntu)
 uv sync --extra mariadb
 
 # For all database drivers
@@ -499,3 +499,4 @@ MIT
 
 - [SolarEdge Monitoring API Documentation](https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf)
 - [SolarEdge Monitoring Portal](https://monitoring.solaredge.com/)
+
