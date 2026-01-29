@@ -1,6 +1,6 @@
 [project]
 name = "seh"
-version = "0.1.0"
+version = "0.2.0"
 description = "SolarEdge Harvest - Download SolarEdge monitoring data to a relational database"
 readme = "README.md"
 license = { text = "MIT" }

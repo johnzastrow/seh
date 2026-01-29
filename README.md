@@ -5,15 +5,18 @@ Download your data from SolarEdge monitoring servers and store it in a relationa
 ## Features
 
 - **Multi-database support**: SQLite (default), PostgreSQL, and MariaDB
-- **Comprehensive data sync**: Sites, equipment, energy, power, batteries, meters, alerts, inventory, and inverter telemetry
+- **Comprehensive data sync**: Sites, equipment, energy, power, batteries, meters, alerts, inventory, and telemetry
 - **Incremental sync**: Only fetches new data since last sync with configurable overlap buffer
 - **Rate limiting**: Complies with SolarEdge API limits (3 concurrent requests, 300/day)
 - **Retry with backoff**: Automatic retries with exponential backoff on transient failures
-- **Data export**: Export to CSV or JSON with filtering options
-- **Database views**: Pre-built views for common queries
+- **Data export**: Export to CSV, JSON, Excel (.xlsx), or SQL dump
+- **Database views**: Pre-built views for common queries (8 views with `v_seh_` prefix)
 - **Structured logging**: JSON logging with optional file rotation via structlog
-- **CLI interface**: Rich terminal output with progress tables and status displays
+- **Email notifications**: SMTP email alerts on sync errors or completion
+- **CLI interface**: Rich terminal output with progress tables, status displays, and comprehensive help
 - **Idempotent operations**: Upsert pattern ensures safe re-runs without duplicates
+- **Configurable error handling**: Strict, lenient, or skip modes for error handling
+- **Site filtering**: Sync specific sites by ID
 
 ## Installation
 
@@ -29,6 +32,9 @@ uv sync --extra mariadb
 
 # For all database drivers
 uv sync --extra all-databases
+
+# For Excel export support
+uv pip install openpyxl
 ```
 
 ### Requirements
@@ -64,21 +70,68 @@ uv run seh status
 
 Configuration is via environment variables or a `.env` file:
 
+### Required Settings
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SEH_API_KEY` | SolarEdge API key (**required**) | - |
+
+### API Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `SEH_API_BASE_URL` | API base URL | `https://monitoringapi.solaredge.com` |
 | `SEH_API_TIMEOUT` | Request timeout in seconds | `10` |
 | `SEH_API_MAX_CONCURRENT` | Max concurrent requests | `3` |
 | `SEH_API_DAILY_LIMIT` | Max requests per day | `300` |
+
+### Database Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `SEH_DATABASE_URL` | Database connection URL | `sqlite:///./seh.db` |
+
+### Sync Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SEH_SITE_IDS` | Comma-separated site IDs to sync (syncs all if not set) | - |
 | `SEH_ENERGY_LOOKBACK_DAYS` | Days to look back for energy data on first sync | `365` |
 | `SEH_POWER_LOOKBACK_DAYS` | Days to look back for power data on first sync | `7` |
 | `SEH_SYNC_OVERLAP_MINUTES` | Overlap buffer for incremental syncs | `15` |
+| `SEH_POWER_TIME_UNIT` | Power data granularity (QUARTER_OF_AN_HOUR, HOUR, DAY, WEEK, MONTH, YEAR) | `QUARTER_OF_AN_HOUR` |
+
+### Error Handling Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SEH_ERROR_HANDLING` | Error mode: strict, lenient, skip | `lenient` |
+| `SEH_MAX_RETRIES` | Max retry attempts for failed API requests | `3` |
+| `SEH_RETRY_DELAY` | Base delay in seconds between retries | `2.0` |
+
+### Logging Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `SEH_LOG_LEVEL` | Logging level (DEBUG, INFO, WARNING, ERROR) | `INFO` |
 | `SEH_LOG_FILE` | Log file path (logs to console if not set) | - |
 | `SEH_LOG_MAX_BYTES` | Max log file size before rotation | `10485760` (10MB) |
 | `SEH_LOG_BACKUP_COUNT` | Number of backup log files | `5` |
+
+### Email Notification Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SEH_SMTP_ENABLED` | Enable email notifications | `false` |
+| `SEH_SMTP_HOST` | SMTP server hostname | `smtp.gmail.com` |
+| `SEH_SMTP_PORT` | SMTP server port | `587` |
+| `SEH_SMTP_USE_TLS` | Use TLS for SMTP | `true` |
+| `SEH_SMTP_USERNAME` | SMTP authentication username | - |
+| `SEH_SMTP_PASSWORD` | SMTP authentication password | - |
+| `SEH_SMTP_FROM_EMAIL` | From email address | - |
+| `SEH_SMTP_TO_EMAILS` | Comma-separated recipient emails | - |
+| `SEH_NOTIFY_ON_ERROR` | Send email on sync errors | `true` |
+| `SEH_NOTIFY_ON_SUCCESS` | Send email on successful sync | `false` |
 
 ### Database URL Formats
 
@@ -100,7 +153,7 @@ SEH_DATABASE_URL=mariadb+mariadbconnector://user:password@localhost:3306/seh
 
 ### `seh init-db`
 
-Create database tables. Safe to run multiple times.
+Create database tables and views. Safe to run multiple times.
 
 ```bash
 uv run seh init-db
@@ -125,11 +178,11 @@ uv run seh sync
 # Full sync (fetch all historical data)
 uv run seh sync --full
 
-# Sync specific site only
-uv run seh sync --site 12345
+# Sync specific sites only
+uv run seh sync --sites 12345,67890
 
-# Full sync for specific site
-uv run seh sync --full --site 12345
+# Verbose output
+uv run seh sync -v
 ```
 
 ### `seh status`
@@ -137,21 +190,29 @@ uv run seh sync --full --site 12345
 Show sync status for all sites in the database.
 
 ```bash
+# Basic status
 uv run seh status
+
+# Full diagnostics (API health, DB status, rate limits)
+uv run seh status --diagnostics
+
+# Status for specific sites
+uv run seh status --sites 12345,67890
 ```
 
 ### `seh export`
 
-Export data to CSV or JSON files.
+Export data to CSV, JSON, Excel, or SQL dump files.
 
 ```bash
 # Export site information
 uv run seh export sites
 uv run seh export sites --format json -o sites.json
+uv run seh export sites --format xlsx -o sites.xlsx
 
 # Export energy readings
 uv run seh export energy
-uv run seh export energy --site 12345 --start 2024-01-01 --end 2024-12-31
+uv run seh export energy --sites 12345 --start 2024-01-01 --end 2024-12-31
 
 # Export power readings
 uv run seh export power --format json
@@ -160,19 +221,22 @@ uv run seh export power --format json
 uv run seh export equipment
 
 # Export inverter telemetry
-uv run seh export telemetry --site 12345 --serial ABC123
+uv run seh export telemetry --sites 12345 --serial ABC123
 
 # Export inventory
 uv run seh export inventory
 
 # Export environmental benefits
 uv run seh export environmental
+
+# SQL dump of entire database
+uv run seh export dump -o backup.sql
 ```
 
 **Export options:**
-- `--format`, `-f`: Output format (`csv` or `json`, default: `csv`)
+- `--format`, `-f`: Output format (`csv`, `json`, or `xlsx`, default: `csv`)
 - `--output`, `-o`: Output file path (auto-generates if not specified)
-- `--site`, `-s`: Filter by site ID
+- `--sites`, `-s`: Comma-separated site IDs to filter
 - `--start`, `--end`: Date range filtering (for time-series data)
 - `--serial`: Filter by serial number (telemetry only)
 
@@ -182,54 +246,62 @@ uv run seh export environmental
 # Use custom config file
 uv run seh --config /path/to/.env sync
 
+# Enable verbose output
+uv run seh -v sync
+
 # Get help
 uv run seh --help
 uv run seh sync --help
+
+# Show version
+uv run seh --version
 ```
 
 ## Data Model
 
 ### Database Tables
 
+All tables are prefixed with `seh_` to avoid naming conflicts:
+
 | Table | Description |
 |-------|-------------|
-| `sites` | Installation details (name, location, timezone, peak power, modules) |
-| `equipment` | Inverters, optimizers, gateways with serial numbers and versions |
-| `batteries` | Storage units with capacity, state of charge, and telemetry |
-| `energy_readings` | Daily/monthly energy production in Wh |
-| `power_readings` | 15-minute power measurements in W |
-| `power_flows` | Current power flow snapshots (PV, grid, load, storage) |
-| `meters` | Meter devices (production, consumption, etc.) |
-| `meter_readings` | Meter time-series data with voltage, current, power factor |
-| `alerts` | System alerts with severity, codes, and affected components |
-| `environmental_benefits` | CO2/SO2/NOx savings, trees planted equivalent |
-| `inventory` | Complete equipment inventory by category |
-| `inverter_telemetry` | Detailed inverter data (voltage, current, temperature, mode) |
-| `optimizer_telemetry` | Per-panel optimizer data (DC voltage, current, power, energy) |
-| `sync_metadata` | Tracks last sync time per site and data type |
+| `seh_sites` | Installation details (name, location, timezone, peak power, modules) |
+| `seh_equipment` | Inverters, optimizers, gateways with serial numbers and versions |
+| `seh_batteries` | Storage units with capacity, state of charge, and telemetry |
+| `seh_energy_readings` | Daily/monthly energy production in Wh |
+| `seh_power_readings` | 15-minute power measurements in W |
+| `seh_power_flows` | Current power flow snapshots (PV, grid, load, storage) |
+| `seh_meters` | Meter devices (production, consumption, etc.) |
+| `seh_meter_readings` | Meter time-series data with voltage, current, power factor |
+| `seh_alerts` | System alerts with severity, codes, and affected components |
+| `seh_environmental_benefits` | CO2/SO2/NOx savings, trees planted equivalent |
+| `seh_inventory` | Complete equipment inventory by category |
+| `seh_inverter_telemetry` | Detailed inverter data (voltage, current, temperature, mode) |
+| `seh_optimizer_telemetry` | Per-panel optimizer data (DC voltage, current, power, energy) |
+| `seh_sync_metadata` | Tracks last sync time per site and data type |
 
 ### Database Views
 
-Pre-built views for common queries:
+Pre-built views for common queries (all prefixed with `v_seh_`):
 
 | View | Description |
 |------|-------------|
-| `v_site_summary` | Simplified site information |
-| `v_daily_energy` | Daily energy with kWh conversion |
-| `v_latest_power` | Most recent power reading per site |
-| `v_power_flow_current` | Latest power flow snapshot per site |
-| `v_sync_status` | Current sync status for all sites |
-| `v_equipment_list` | Equipment with site names |
-| `v_battery_status` | Current battery status |
-| `v_energy_monthly` | Monthly energy totals |
+| `v_seh_site_summary` | Simplified site information |
+| `v_seh_daily_energy` | Daily energy with kWh conversion |
+| `v_seh_latest_power` | Most recent power reading per site |
+| `v_seh_power_flow_current` | Latest power flow snapshot per site |
+| `v_seh_sync_status` | Current sync status for all sites |
+| `v_seh_equipment_list` | Equipment with site names |
+| `v_seh_battery_status` | Current battery status |
+| `v_seh_energy_monthly` | Monthly energy totals |
 
 See [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) for complete schema documentation.
 
 ### Sync Strategy
 
 1. **First run** (`--full`): Fetches historical data
-   - Energy: 365 days lookback
-   - Power/Storage/Meters: 7 days lookback
+   - Energy: 365 days lookback (configurable)
+   - Power/Storage/Meters: 7 days lookback (configurable)
 
 2. **Subsequent runs**: Incremental sync
    - Starts from `last_data_timestamp - 15 minutes` (configurable overlap)
@@ -256,11 +328,14 @@ Add to crontab for automatic updates:
 # Edit crontab
 crontab -e
 
+# Run every hour
+0 * * * * cd /path/to/seh && uv run seh sync >> /var/log/seh.log 2>&1
+
 # Run every 6 hours
 0 */6 * * * cd /path/to/seh && uv run seh sync >> /var/log/seh.log 2>&1
 
-# Run daily at 2 AM
-0 2 * * * cd /path/to/seh && uv run seh sync >> /var/log/seh.log 2>&1
+# Run every 15 minutes during daylight hours
+*/15 6-20 * * * cd /path/to/seh && uv run seh sync
 ```
 
 ## Architecture
@@ -270,7 +345,7 @@ src/seh/
 ├── cli.py                   # Click CLI with Rich output
 ├── config/
 │   ├── settings.py          # Pydantic Settings from env vars
-│   └── logging.py           # Structlog configuration
+│   └── logging.py           # Structlog + email notifications
 ├── api/
 │   ├── client.py            # Async httpx client for all API endpoints
 │   ├── rate_limiter.py      # Semaphore + daily quota tracking
@@ -299,6 +374,7 @@ src/seh/
 | click | CLI framework |
 | rich | Terminal tables and formatting |
 | structlog | Structured JSON logging |
+| openpyxl | Excel export (optional) |
 
 ## Development
 
@@ -320,6 +396,27 @@ uv run pytest
 
 # Run tests with coverage
 uv run pytest --cov=src/seh
+
+# Run tests for specific database backend
+SEH_DATABASE_URL="postgresql+psycopg://user:pass@localhost/seh" uv run pytest -m postgresql
+```
+
+## Testing
+
+The project includes 81+ unit and integration tests:
+
+```bash
+# Run all tests
+uv run pytest
+
+# Run with verbose output
+uv run pytest -v
+
+# Run specific test file
+uv run pytest tests/test_database_backends.py
+
+# Test with different Python versions
+./scripts/test_python_versions.sh
 ```
 
 ## Troubleshooting
@@ -361,10 +458,24 @@ uv sync --extra mariadb
 See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items remaining:
 
 - [ ] Web scraping for additional data not in API
-- [ ] Unit and integration tests
 - [ ] Grafana/dashboard integration examples
+- [ ] Alembic database migrations
+- [ ] Docker support
 
-### Recently Completed
+### Recently Completed (v0.2.0)
+
+- [x] Comprehensive unit tests (81+ tests)
+- [x] Multi-database backend testing (SQLite, PostgreSQL, MariaDB)
+- [x] Comprehensive CLI help text with examples
+- [x] Email notifications (SMTP)
+- [x] Excel export format (.xlsx)
+- [x] SQL dump export
+- [x] Multiple site filtering (--sites flag)
+- [x] Full diagnostics (--diagnostics flag)
+- [x] Configurable error handling
+- [x] Power data granularity configuration
+
+### Previously Completed (v0.1.0)
 
 - [x] Database views for simplified querying (8 views)
 - [x] Inverter telemetry data sync
@@ -383,7 +494,8 @@ MIT
 1. Fork the repository
 2. Create a feature branch
 3. Run linting: `uv run ruff check src`
-4. Submit a pull request
+4. Run tests: `uv run pytest`
+5. Submit a pull request
 
 ## Resources
 

@@ -2,11 +2,13 @@
 
 This document describes all data structures in the SolarEdge Harvest (seh) database.
 
+**Note:** All tables are prefixed with `seh_` and all views are prefixed with `v_seh_` to avoid naming conflicts.
+
 ## Entity Relationship Diagram
 
 ```
                                     +------------------+
-                                    |      sites       |
+                                    |    seh_sites     |
                                     +------------------+
                                     | id (PK)          |
                                     | name             |
@@ -20,7 +22,7 @@ This document describes all data structures in the SolarEdge Harvest (seh) datab
           |              |           |           |           |                  |
           v              v           v           v           v                  v
 +------------------+ +------------------+ +------------------+ +------------------+
-|    equipment     | |    batteries     | | energy_readings  | | power_readings   |
+|  seh_equipment   | |  seh_batteries   | |seh_energy_readings| |seh_power_readings|
 +------------------+ +------------------+ +------------------+ +------------------+
 | id (PK)          | | id (PK)          | | id (PK)          | | id (PK)          |
 | site_id (FK)     | | site_id (FK)     | | site_id (FK)     | | site_id (FK)     |
@@ -33,7 +35,7 @@ This document describes all data structures in the SolarEdge Harvest (seh) datab
           |              |           |           |           |                  |
           v              v           v           v           v                  v
 +------------------+ +------------------+ +------------------+ +------------------+
-|   power_flows    | |     meters       | |     alerts       | |    inventory     |
+| seh_power_flows  | |   seh_meters     | |   seh_alerts     | |  seh_inventory   |
 +------------------+ +------------------+ +------------------+ +------------------+
 | id (PK)          | | id (PK)          | | id (PK)          | | id (PK)          |
 | site_id (FK)     | | site_id (FK)     | | site_id (FK)     | | site_id (FK)     |
@@ -47,7 +49,7 @@ This document describes all data structures in the SolarEdge Harvest (seh) datab
           |                                     |                  |
           v                                     v                  v
 +------------------+                 +------------------+ +------------------+
-| meter_readings   |                 | environmental_   | | inverter_        |
+|seh_meter_readings|                 |seh_environmental_| |seh_inverter_     |
 +------------------+                 |    benefits      | |   telemetry      |
 | id (PK)          |                 +------------------+ +------------------+
 | meter_id (FK)    |                 | id (PK)          | | id (PK)          |
@@ -58,7 +60,7 @@ This document describes all data structures in the SolarEdge Harvest (seh) datab
 +------------------+                 +------------------+ | ...              |
                                                          +------------------+
                               +------------------+
-                              |  sync_metadata   |
+                              |seh_sync_metadata |
                               +------------------+
                               | id (PK)          |
                               | site_id (FK)     |
@@ -72,7 +74,7 @@ This document describes all data structures in the SolarEdge Harvest (seh) datab
 
 ## Tables
 
-### sites
+### seh_sites
 
 The central entity representing a SolarEdge installation site.
 
@@ -107,14 +109,14 @@ The central entity representing a SolarEdge installation site.
 
 ---
 
-### equipment
+### seh_equipment
 
 Equipment associated with a site (inverters, optimizers, gateways).
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `serial_number` | VARCHAR(100) | No | Equipment serial number (unique) |
 | `name` | VARCHAR(255) | Yes | Equipment name/label |
 | `manufacturer` | VARCHAR(100) | Yes | Equipment manufacturer |
@@ -137,14 +139,14 @@ Equipment associated with a site (inverters, optimizers, gateways).
 
 ---
 
-### batteries
+### seh_batteries
 
 Battery storage units associated with a site.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `serial_number` | VARCHAR(100) | No | Battery serial number (unique) |
 | `name` | VARCHAR(255) | Yes | Battery name/label |
 | `manufacturer` | VARCHAR(100) | Yes | Battery manufacturer |
@@ -167,14 +169,14 @@ Battery storage units associated with a site.
 
 ---
 
-### energy_readings
+### seh_energy_readings
 
 Daily or monthly energy production readings.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `reading_date` | DATE | No | Date of the reading |
 | `time_unit` | VARCHAR(20) | No | Time unit: DAY, MONTH, YEAR |
 | `energy_wh` | FLOAT | Yes | Energy produced in Watt-hours |
@@ -186,14 +188,14 @@ Daily or monthly energy production readings.
 
 ---
 
-### power_readings
+### seh_power_readings
 
 Instantaneous power readings (typically 15-minute intervals).
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `power_watts` | FLOAT | Yes | Power in Watts |
 | `created_at` | DATETIME | No | Record creation timestamp |
@@ -204,14 +206,14 @@ Instantaneous power readings (typically 15-minute intervals).
 
 ---
 
-### power_flows
+### seh_power_flows
 
 Power flow snapshots showing energy distribution between PV, grid, load, and storage.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `unit` | VARCHAR(20) | Yes | Power unit (kW, W) |
 | `grid_status` | VARCHAR(20) | Yes | Grid connection status |
@@ -232,14 +234,14 @@ Power flow snapshots showing energy distribution between PV, grid, load, and sto
 
 ---
 
-### meters
+### seh_meters
 
 Meter devices associated with a site.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `name` | VARCHAR(100) | No | Meter name/label |
 | `manufacturer` | VARCHAR(100) | Yes | Meter manufacturer |
 | `model` | VARCHAR(100) | Yes | Meter model |
@@ -255,14 +257,14 @@ Meter devices associated with a site.
 
 ---
 
-### meter_readings
+### seh_meter_readings
 
 Time-series readings from meters.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `meter_id` | INTEGER | No | Foreign key to meters.id |
+| `meter_id` | INTEGER | No | Foreign key to seh_meters.id |
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `power` | FLOAT | Yes | Power in Watts |
 | `energy_lifetime` | FLOAT | Yes | Lifetime energy in Wh |
@@ -284,14 +286,14 @@ Time-series readings from meters.
 
 ---
 
-### alerts
+### seh_alerts
 
 System alerts and notifications for a site.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `alert_id` | INTEGER | No | SolarEdge alert ID |
 | `severity` | VARCHAR(20) | Yes | Severity: HIGH, MEDIUM, LOW |
 | `alert_type` | VARCHAR(100) | Yes | Alert type classification |
@@ -308,14 +310,14 @@ System alerts and notifications for a site.
 
 ---
 
-### environmental_benefits
+### seh_environmental_benefits
 
 Environmental impact calculations for a site.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `co2_saved` | FLOAT | Yes | CO2 emissions avoided |
 | `so2_saved` | FLOAT | Yes | SO2 emissions avoided |
 | `nox_saved` | FLOAT | Yes | NOx emissions avoided |
@@ -331,14 +333,14 @@ Environmental impact calculations for a site.
 
 ---
 
-### inventory
+### seh_inventory
 
 Complete inventory of equipment at a site.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `name` | VARCHAR(255) | No | Item name |
 | `manufacturer` | VARCHAR(100) | Yes | Manufacturer |
 | `model` | VARCHAR(100) | Yes | Model |
@@ -359,14 +361,14 @@ Complete inventory of equipment at a site.
 
 ---
 
-### inverter_telemetry
+### seh_inverter_telemetry
 
 Detailed inverter telemetry data at 5-minute intervals.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `serial_number` | VARCHAR(50) | No | Inverter serial number |
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `total_active_power` | FLOAT | Yes | Total AC power output in Watts |
@@ -391,14 +393,14 @@ Detailed inverter telemetry data at 5-minute intervals.
 
 ---
 
-### optimizer_telemetry
+### seh_optimizer_telemetry
 
 Power optimizer telemetry data at 5-minute intervals.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `serial_number` | VARCHAR(50) | No | Optimizer serial number |
 | `inverter_serial` | VARCHAR(50) | Yes | Connected inverter serial |
 | `timestamp` | DATETIME | No | Reading timestamp |
@@ -421,14 +423,14 @@ Power optimizer telemetry data at 5-minute intervals.
 
 ---
 
-### sync_metadata
+### seh_sync_metadata
 
 Tracks synchronization state for each data type per site.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
-| `site_id` | INTEGER | No | Foreign key to sites.id |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `data_type` | VARCHAR(50) | No | Data type being synced |
 | `last_sync_time` | DATETIME | No | When sync was last run |
 | `last_data_timestamp` | DATETIME | Yes | Timestamp of most recent data |
@@ -460,7 +462,7 @@ Tracks synchronization state for each data type per site.
 
 Views provide simplified access to common queries.
 
-### v_site_summary
+### v_seh_site_summary
 
 Simplified site information view.
 
@@ -474,12 +476,12 @@ SELECT
     primary_module_manufacturer,
     primary_module_model,
     created_at, updated_at
-FROM sites
+FROM seh_sites
 ```
 
 ---
 
-### v_daily_energy
+### v_seh_daily_energy
 
 Daily energy production with kWh conversion.
 
@@ -491,14 +493,14 @@ SELECT
     e.energy_wh,
     ROUND(e.energy_wh / 1000.0, 2) AS energy_kwh,
     e.created_at
-FROM energy_readings e
-JOIN sites s ON e.site_id = s.id
+FROM seh_energy_readings e
+JOIN seh_sites s ON e.site_id = s.id
 ORDER BY e.site_id, e.reading_date DESC
 ```
 
 ---
 
-### v_latest_power
+### v_seh_latest_power
 
 Most recent power reading per site.
 
@@ -510,18 +512,18 @@ SELECT
     p.power_watts,
     ROUND(p.power_watts / 1000.0, 2) AS power_kw,
     p.created_at
-FROM power_readings p
-JOIN sites s ON p.site_id = s.id
+FROM seh_power_readings p
+JOIN seh_sites s ON p.site_id = s.id
 WHERE p.timestamp = (
     SELECT MAX(p2.timestamp)
-    FROM power_readings p2
+    FROM seh_power_readings p2
     WHERE p2.site_id = p.site_id
 )
 ```
 
 ---
 
-### v_power_flow_current
+### v_seh_power_flow_current
 
 Most recent power flow snapshot per site.
 
@@ -536,18 +538,18 @@ SELECT
     pf.storage_status, pf.storage_power,
     pf.storage_charge_level,
     pf.created_at
-FROM power_flows pf
-JOIN sites s ON pf.site_id = s.id
+FROM seh_power_flows pf
+JOIN seh_sites s ON pf.site_id = s.id
 WHERE pf.timestamp = (
     SELECT MAX(pf2.timestamp)
-    FROM power_flows pf2
+    FROM seh_power_flows pf2
     WHERE pf2.site_id = pf.site_id
 )
 ```
 
 ---
 
-### v_sync_status
+### v_seh_sync_status
 
 Current sync status for all sites and data types.
 
@@ -562,14 +564,14 @@ SELECT
     sm.status,
     sm.error_message,
     sm.updated_at
-FROM sync_metadata sm
-JOIN sites s ON sm.site_id = s.id
+FROM seh_sync_metadata sm
+JOIN seh_sites s ON sm.site_id = s.id
 ORDER BY sm.site_id, sm.data_type
 ```
 
 ---
 
-### v_equipment_list
+### v_seh_equipment_list
 
 Complete equipment list with site names.
 
@@ -585,14 +587,14 @@ SELECT
     e.connected_optimizers,
     e.last_report_date,
     e.created_at
-FROM equipment e
-JOIN sites s ON e.site_id = s.id
+FROM seh_equipment e
+JOIN seh_sites s ON e.site_id = s.id
 ORDER BY e.site_id, e.equipment_type, e.name
 ```
 
 ---
 
-### v_battery_status
+### v_seh_battery_status
 
 Current battery status for all batteries.
 
@@ -612,14 +614,14 @@ SELECT
     b.lifetime_energy_charged,
     b.lifetime_energy_discharged,
     b.created_at
-FROM batteries b
-JOIN sites s ON b.site_id = s.id
+FROM seh_batteries b
+JOIN seh_sites s ON b.site_id = s.id
 ORDER BY b.site_id, b.name
 ```
 
 ---
 
-### v_energy_monthly
+### v_seh_energy_monthly
 
 Monthly energy totals aggregated from daily readings.
 
@@ -631,7 +633,7 @@ SELECT
     SUM(energy_wh) AS total_wh,
     ROUND(SUM(energy_wh) / 1000.0, 2) AS total_kwh,
     COUNT(*) AS days_with_data
-FROM energy_readings
+FROM seh_energy_readings
 WHERE time_unit = 'DAY'
 GROUP BY site_id, strftime('%Y-%m', reading_date)
 ORDER BY site_id, month DESC
@@ -645,7 +647,7 @@ SELECT
     SUM(energy_wh) AS total_wh,
     ROUND(SUM(energy_wh) / 1000.0, 2) AS total_kwh,
     COUNT(*) AS days_with_data
-FROM energy_readings
+FROM seh_energy_readings
 WHERE time_unit = 'DAY'
 GROUP BY site_id, TO_CHAR(reading_date, 'YYYY-MM')
 ORDER BY site_id, month DESC

@@ -314,7 +314,7 @@ def parse_site_ids(sites_str: str | None) -> list[int] | None:
     is_flag=True,
     help="Enable verbose output (sets log level to DEBUG).",
 )
-@click.version_option(version="0.1.0", prog_name="seh")
+@click.version_option(version="0.2.0", prog_name="seh")
 @click.pass_context
 def cli(ctx: click.Context, config: str | None, verbose: bool) -> None:
     """SolarEdge Harvest - Download SolarEdge data to a database."""
