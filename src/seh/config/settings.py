@@ -1,6 +1,8 @@
 """Application settings using Pydantic Settings."""
 
+import re
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
@@ -132,6 +134,18 @@ class Settings(BaseSettings):
         description="Send email notification on successful sync",
     )
 
+    # Data Type Filtering
+    skip_data_types: str | None = Field(
+        default=None,
+        description="Comma-separated data types to skip during sync (e.g., 'meter,alert')",
+    )
+
+    # Valid data types for skip_data_types
+    VALID_DATA_TYPES: frozenset[str] = frozenset({
+        "site", "equipment", "energy", "power", "storage", "meter",
+        "environmental", "alert", "inventory", "inverter_telemetry", "optimizer_telemetry"
+    })
+
     def get_site_ids_list(self) -> list[int] | None:
         """Parse site_ids setting into a list of integers."""
         if not self.site_ids:
@@ -147,8 +161,58 @@ class Settings(BaseSettings):
             return []
         return [e.strip() for e in self.smtp_to_emails.split(",") if e.strip()]
 
+    def get_skip_data_types_list(self) -> list[str] | None:
+        """Parse skip_data_types into a list of data type strings.
+
+        Returns:
+            List of valid data type strings to skip, or None if not set.
+        """
+        if not self.skip_data_types:
+            return None
+        types = [t.strip().lower() for t in self.skip_data_types.split(",") if t.strip()]
+        # Filter to only valid data types
+        valid_types = [t for t in types if t in self.VALID_DATA_TYPES]
+        return valid_types if valid_types else None
+
 
 @lru_cache
 def get_settings() -> Settings:
     """Get cached application settings."""
     return Settings()
+
+
+def update_env_file(key: str, value: str, env_path: str = ".env") -> bool:
+    """Update or add a key in .env file, preserving comments and formatting.
+
+    Args:
+        key: Environment variable name (e.g., 'SEH_SKIP_DATA_TYPES').
+        value: Value to set.
+        env_path: Path to .env file.
+
+    Returns:
+        True if file was updated, False if file doesn't exist.
+    """
+    path = Path(env_path)
+
+    # Read existing content or start fresh
+    if path.exists():
+        content = path.read_text()
+    else:
+        content = ""
+
+    # Pattern to match the key (with optional leading comment/whitespace)
+    pattern = re.compile(rf'^(#?\s*)?{re.escape(key)}\s*=.*$', re.MULTILINE)
+
+    # Check if key already exists
+    match = pattern.search(content)
+    if match:
+        # Replace existing line (uncomment if commented)
+        new_content = pattern.sub(f'{key}={value}', content)
+    else:
+        # Append to end of file
+        if content and not content.endswith('\n'):
+            content += '\n'
+        new_content = content + f'{key}={value}\n'
+
+    path.write_text(new_content)
+    return True

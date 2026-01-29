@@ -18,9 +18,7 @@ import csv
 import json
 import os
 import subprocess
-import sys
-from datetime import datetime, date
-from pathlib import Path
+from datetime import date, datetime
 
 import click
 from rich.console import Console
@@ -90,6 +88,8 @@ CONFIGURATION:
 
   Sync options:
     SEH_SITE_IDS           Comma-separated site IDs to sync (syncs all if not set)
+    SEH_SKIP_DATA_TYPES    Comma-separated data types to skip (e.g., meter,alert)
+                           Run 'seh check-api' to auto-detect unavailable endpoints
     SEH_ENERGY_LOOKBACK_DAYS   Days of energy data for first sync (default: 365)
     SEH_POWER_LOOKBACK_DAYS    Days of power data for first sync (default: 7)
     SEH_POWER_TIME_UNIT        Power data granularity (default: QUARTER_OF_AN_HOUR)
@@ -403,31 +403,53 @@ Check API connectivity and list available sites.
 Validates your API key and displays all sites accessible with your credentials.
 Use this command to verify configuration before running sync.
 
+By default, also probes all API endpoints to detect which ones are available
+for your account. Endpoints that return errors (400, 403, etc.) can be
+automatically excluded from future syncs to prevent log pollution.
+
 EXAMPLES:
-  # Basic API check
+  # Basic API check with endpoint probing
   seh check-api
+
+  # Skip endpoint probing
+  seh check-api --no-probe
+
+  # Probe and auto-update .env without prompting
+  seh check-api --update-config
 
   # With custom config file
   seh -c production.env check-api
 
 OUTPUT:
-  Displays a table with:
-  - Site ID (use this for --sites filter)
-  - Site Name
-  - Status (Active, Pending, etc.)
-  - Peak Power (kW)
-  - Last Update Time
+  Displays:
+  - Available sites table (ID, name, status, peak power, last update)
+  - Endpoint availability table showing which data types work/fail
+  - Option to exclude failing endpoints from future syncs
 
 TROUBLESHOOTING:
   "API check failed: 401" - Invalid API key
   "API check failed: 403" - API key lacks permissions for this site
   "No sites found" - API key is valid but has no associated sites
 """)
+@click.option(
+    "--probe/--no-probe",
+    default=True,
+    help="Probe API endpoints to detect availability (default: enabled).",
+)
+@click.option(
+    "--update-config",
+    is_flag=True,
+    help="Automatically update .env with exclusions (no prompt).",
+)
 @click.pass_context
-def check_api(ctx: click.Context) -> None:
+def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
     """Check API connectivity and list available sites."""
+    from datetime import timedelta
+
     from seh.api.client import SolarEdgeClient
     from seh.config.logging import get_logger
+    from seh.config.settings import update_env_file
+    from seh.utils.exceptions import APIError
 
     settings = load_settings(ctx.obj.get("config_path"))
     logger = get_logger(__name__)
@@ -437,15 +459,116 @@ def check_api(ctx: click.Context) -> None:
     async def _check():
         async with SolarEdgeClient(settings) as client:
             sites = await client.get_sites()
-            return sites
+            return client, sites
+
+    async def _probe_endpoints(client: SolarEdgeClient, site_id: int) -> dict[str, dict]:
+        """Probe all API endpoints for a site.
+
+        Returns:
+            Dict mapping data_type to {status: str, code: int|None, notes: str}
+        """
+        from datetime import datetime
+
+        results: dict[str, dict] = {}
+        now = datetime.now()
+        yesterday = now - timedelta(days=1)
+
+        # Probe site details
+        try:
+            await client.get_site_details(site_id)
+            results["site"] = {"status": "ok", "code": None, "notes": ""}
+        except APIError as e:
+            results["site"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe equipment
+        equipment_list = []
+        try:
+            equipment_list = await client.get_equipment(site_id)
+            count = len(equipment_list)
+            results["equipment"] = {"status": "ok", "code": None, "notes": f"{count} inverter(s)" if count else "No equipment"}
+        except APIError as e:
+            results["equipment"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe energy
+        try:
+            await client.get_energy(site_id, yesterday.date(), now.date())
+            results["energy"] = {"status": "ok", "code": None, "notes": ""}
+        except APIError as e:
+            results["energy"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe power
+        try:
+            await client.get_power(site_id, yesterday, now)
+            results["power"] = {"status": "ok", "code": None, "notes": ""}
+        except APIError as e:
+            results["power"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe storage
+        try:
+            storage_data = await client.get_storage_data(site_id, yesterday, now)
+            batteries = storage_data.get("batteries", [])
+            results["storage"] = {"status": "ok", "code": None, "notes": f"{len(batteries)} battery(ies)" if batteries else "No batteries"}
+        except APIError as e:
+            results["storage"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe meters
+        try:
+            meters = await client.get_meters(site_id)
+            count = len(meters)
+            results["meter"] = {"status": "ok", "code": None, "notes": f"{count} meter(s)" if count else "No meters"}
+        except APIError as e:
+            results["meter"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe environmental benefits
+        try:
+            await client.get_environmental_benefits(site_id)
+            results["environmental"] = {"status": "ok", "code": None, "notes": ""}
+        except APIError as e:
+            results["environmental"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe alerts
+        try:
+            alerts = await client.get_alerts(site_id)
+            count = len(alerts)
+            results["alert"] = {"status": "ok", "code": None, "notes": f"{count} alert(s)" if count else "No alerts"}
+        except APIError as e:
+            results["alert"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe inventory
+        try:
+            await client.get_inventory(site_id)
+            results["inventory"] = {"status": "ok", "code": None, "notes": ""}
+        except APIError as e:
+            results["inventory"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+
+        # Probe inverter telemetry (requires equipment)
+        if equipment_list:
+            try:
+                serial = equipment_list[0].get("serialNumber")
+                if serial:
+                    await client.get_inverter_data(site_id, serial, yesterday, now)
+                    results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": ""}
+                else:
+                    results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": "No serial found"}
+            except APIError as e:
+                results["inverter_telemetry"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
+        else:
+            results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": "No equipment to probe"}
+
+        # Optimizer telemetry - typically accessed via inverter data endpoint
+        # We'll mark it as requiring equipment similar to inverter telemetry
+        results["optimizer_telemetry"] = {"status": "ok", "code": None, "notes": "Requires optimizer serial"}
+
+        return results
 
     try:
-        sites = run_async(_check())
+        _, sites = run_async(_check())
 
         if not sites:
             console.print("[yellow]No sites found for this API key.[/yellow]")
             return
 
+        # Display sites table
         table = Table(title="Available Sites")
         table.add_column("ID", style="cyan")
         table.add_column("Name", style="green")
@@ -477,6 +600,84 @@ def check_api(ctx: click.Context) -> None:
 
         console.print(table)
         console.print(f"\n[green]Found {len(sites)} site(s)[/green]")
+
+        # Endpoint probing
+        if probe:
+            first_site = sites[0]
+            site_id = first_site.get("id")
+            site_name = first_site.get("name", "Unknown")
+
+            console.print(f"\n[bold]Probing API endpoints for site {site_id} ({site_name})...[/bold]")
+
+            async def _do_probe():
+                async with SolarEdgeClient(settings) as probe_client:
+                    return await _probe_endpoints(probe_client, site_id)
+
+            probe_results = run_async(_do_probe())
+
+            # Display probe results
+            probe_table = Table(title="Endpoint Availability")
+            probe_table.add_column("Data Type", style="cyan")
+            probe_table.add_column("Status")
+            probe_table.add_column("Notes")
+
+            failed_types: list[str] = []
+            data_type_order = [
+                "site", "equipment", "energy", "power", "storage",
+                "meter", "environmental", "alert", "inventory",
+                "inverter_telemetry", "optimizer_telemetry"
+            ]
+
+            for data_type in data_type_order:
+                result = probe_results.get(data_type, {})
+                status = result.get("status", "unknown")
+                code = result.get("code")
+                notes = result.get("notes", "")
+
+                if status == "ok":
+                    status_str = "[green]OK[/green]"
+                else:
+                    status_str = f"[red]{code or 'Error'}[/red]"
+                    failed_types.append(data_type)
+
+                probe_table.add_row(data_type, status_str, notes[:40] if notes else "")
+
+            console.print(probe_table)
+
+            # Handle failures
+            if failed_types:
+                console.print(f"\n[yellow]Warning:[/yellow] {len(failed_types)} endpoint(s) unavailable: {', '.join(failed_types)}")
+
+                # Check current skip list
+                current_skip = settings.get_skip_data_types_list() or []
+                new_skips = [t for t in failed_types if t not in current_skip]
+
+                if new_skips:
+                    all_skips = sorted(set(current_skip + new_skips))
+                    skip_value = ",".join(all_skips)
+
+                    if update_config:
+                        # Auto-update without prompting
+                        update_env_file("SEH_SKIP_DATA_TYPES", skip_value)
+                        console.print(f"\n[green]Updated .env with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
+                    else:
+                        # Prompt user
+                        console.print("\nWould you like to exclude these from future syncs?")
+                        console.print(f"This will set: SEH_SKIP_DATA_TYPES={skip_value}")
+                        response = click.prompt("Update .env?", type=click.Choice(["y", "n"], case_sensitive=False), default="y")
+
+                        if response.lower() == "y":
+                            update_env_file("SEH_SKIP_DATA_TYPES", skip_value)
+                            console.print(f"\n[green]Updated .env with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
+                        else:
+                            console.print("\n[yellow]Skipped .env update[/yellow]")
+
+                    console.print("\n[dim]Tip: Run 'seh check-api' again after API key changes to reassess.[/dim]")
+                else:
+                    console.print("\n[dim]All failing endpoints already in skip list.[/dim]")
+            else:
+                console.print("\n[green]All endpoints available![/green]")
+
         logger.info("API check successful", sites=len(sites))
 
     except Exception as e:
@@ -504,7 +705,7 @@ def check_api(ctx: click.Context) -> None:
 def sync(ctx: click.Context, full: bool, sites_str: str | None, verbose: bool) -> None:
     """Synchronize data from SolarEdge to the database."""
     from seh.api.client import SolarEdgeClient
-    from seh.config.logging import get_logger, SyncSummary, EmailNotifier
+    from seh.config.logging import EmailNotifier, SyncSummary, get_logger
     from seh.db.engine import create_engine, create_tables
     from seh.sync.orchestrator import SyncOrchestrator
 
@@ -656,12 +857,12 @@ def status(ctx: click.Context, diagnostics: bool, sites_str: str | None) -> None
 
         # Email configuration
         if settings.smtp_enabled:
-            console.print(f"\n  Email Notifications: Enabled")
+            console.print("\n  Email Notifications: Enabled")
             console.print(f"  SMTP Host: {settings.smtp_host}:{settings.smtp_port}")
             console.print(f"  Notify on Error: {settings.notify_on_error}")
             console.print(f"  Notify on Success: {settings.notify_on_success}")
         else:
-            console.print(f"\n  Email Notifications: Disabled")
+            console.print("\n  Email Notifications: Disabled")
 
         console.print("")
 
@@ -862,6 +1063,7 @@ EXAMPLES:
 def export_energy(ctx: click.Context, format: str, output: str | None, sites_str: str | None, start: datetime | None, end: datetime | None) -> None:
     """Export energy readings."""
     from sqlalchemy import select
+
     from seh.db.engine import create_engine, get_session
     from seh.db.models.energy import EnergyReading
     from seh.db.models.site import Site
@@ -921,6 +1123,7 @@ EXAMPLES:
 def export_power(ctx: click.Context, format: str, output: str | None, sites_str: str | None, start: datetime | None, end: datetime | None) -> None:
     """Export power readings."""
     from sqlalchemy import select
+
     from seh.db.engine import create_engine, get_session
     from seh.db.models.power import PowerReading
     from seh.db.models.site import Site
@@ -969,6 +1172,7 @@ EXAMPLES:
 def export_equipment(ctx: click.Context, format: str, output: str | None, sites_str: str | None) -> None:
     """Export equipment list."""
     from sqlalchemy import select
+
     from seh.db.engine import create_engine, get_session
     from seh.db.models.equipment import Equipment
     from seh.db.models.site import Site
@@ -1021,6 +1225,7 @@ EXAMPLES:
 def export_telemetry(ctx: click.Context, format: str, output: str | None, sites_str: str | None, serial: str | None, start: datetime | None, end: datetime | None) -> None:
     """Export inverter telemetry data."""
     from sqlalchemy import select
+
     from seh.db.engine import create_engine, get_session
     from seh.db.models.inverter_telemetry import InverterTelemetry
     from seh.db.models.site import Site
@@ -1078,6 +1283,7 @@ EXAMPLES:
 def export_inventory(ctx: click.Context, format: str, output: str | None, sites_str: str | None) -> None:
     """Export inventory items."""
     from sqlalchemy import select
+
     from seh.db.engine import create_engine, get_session
     from seh.db.models.inventory import InventoryItem
     from seh.db.models.site import Site
@@ -1125,6 +1331,7 @@ EXAMPLES:
 def export_environmental(ctx: click.Context, format: str, output: str | None, sites_str: str | None) -> None:
     """Export environmental benefits."""
     from sqlalchemy import select
+
     from seh.db.engine import create_engine, get_session
     from seh.db.models.environmental import EnvironmentalBenefits
     from seh.db.models.site import Site

@@ -174,9 +174,14 @@ class SyncOrchestrator:
         records_synced: dict[str, int] = {}
         errors: dict[str, str] = {}
 
+        # Get skip list from settings
+        skip_types = set(self.settings.get_skip_data_types_list() or [])
+        if skip_types:
+            logger.info("Skipping data types", skipped=list(skip_types))
+
         with get_session(self.engine) as session:
-            # Create strategies
-            strategies = [
+            # Create all strategies
+            all_strategies = [
                 SiteSyncStrategy(self.client, session, self.settings),
                 EquipmentSyncStrategy(self.client, session, self.settings),
                 EnergySyncStrategy(self.client, session, self.settings),
@@ -189,6 +194,9 @@ class SyncOrchestrator:
                 InverterTelemetrySyncStrategy(self.client, session, self.settings),
                 OptimizerTelemetrySyncStrategy(self.client, session, self.settings),
             ]
+
+            # Filter out skipped data types
+            strategies = [s for s in all_strategies if s.data_type not in skip_types]
 
             # Run each strategy
             for strategy in strategies:

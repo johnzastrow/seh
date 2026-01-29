@@ -181,6 +181,10 @@ SEH_DATABASE_URL=sqlite:///./seh.db
 # Site filtering
 SEH_SITE_IDS=123456,789012  # Optional, syncs all if not set
 
+# Data type filtering (skip unavailable endpoints)
+SEH_SKIP_DATA_TYPES=meter,alert  # Comma-separated list of data types to skip
+# Valid: site, equipment, energy, power, storage, meter, environmental, alert, inventory, inverter_telemetry, optimizer_telemetry
+
 # Sync settings
 SEH_ENERGY_LOOKBACK_DAYS=365
 SEH_POWER_LOOKBACK_DAYS=7
