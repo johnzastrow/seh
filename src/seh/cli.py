@@ -966,7 +966,6 @@ def write_output(data: list[dict], output: str | None, format: str, name: str) -
     elif format == "xlsx":
         try:
             import openpyxl
-            from openpyxl.utils.dataframe import dataframe_to_rows
         except ImportError:
             console.print("[red]Excel export requires openpyxl. Install with:[/red]")
             console.print("  uv pip install openpyxl")
