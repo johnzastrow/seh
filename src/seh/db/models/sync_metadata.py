@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class SyncMetadata(Base, TimestampMixin):
     """Tracks the last successful sync for each site and data type."""
 
-    __tablename__ = "sync_metadata"
+    __tablename__ = "seh_sync_metadata"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
     data_type: Mapped[str] = mapped_column(
         String(50), nullable=False

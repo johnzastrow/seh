@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class Meter(Base, TimestampMixin):
     """Meter device associated with a site."""
 
-    __tablename__ = "meters"
+    __tablename__ = "seh_meters"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     manufacturer: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -42,11 +42,11 @@ class Meter(Base, TimestampMixin):
 class MeterReading(Base, TimestampMixin):
     """Meter reading at a point in time."""
 
-    __tablename__ = "meter_readings"
+    __tablename__ = "seh_meter_readings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     meter_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("meters.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_meters.id", ondelete="CASCADE"), nullable=False, index=True
     )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

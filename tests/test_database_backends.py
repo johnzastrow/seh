@@ -97,20 +97,20 @@ class TestDatabaseConnection:
     def test_tables_created(self, engine, db_type):
         """Test that all tables are created."""
         expected_tables = {
-            "sites",
-            "equipment",
-            "batteries",
-            "energy_readings",
-            "power_readings",
-            "power_flows",
-            "meters",
-            "meter_readings",
-            "alerts",
-            "environmental_benefits",
-            "inventory",
-            "inverter_telemetry",
-            "optimizer_telemetry",
-            "sync_metadata",
+            "seh_sites",
+            "seh_equipment",
+            "seh_batteries",
+            "seh_energy_readings",
+            "seh_power_readings",
+            "seh_power_flows",
+            "seh_meters",
+            "seh_meter_readings",
+            "seh_alerts",
+            "seh_environmental_benefits",
+            "seh_inventory",
+            "seh_inverter_telemetry",
+            "seh_optimizer_telemetry",
+            "seh_sync_metadata",
         }
 
         with engine.connect() as conn:
@@ -187,14 +187,14 @@ class TestSiteOperations:
 class TestEquipmentOperations:
     """Test Equipment model operations across backends."""
 
-    def test_create_equipment(self, session, db_type):
-        """Test creating equipment."""
+    def test_create_seh_equipment(self, session, db_type):
+        """Test creating seh_equipment."""
         # Create site first
         site = Site(id=99903, name="Equipment Test Site")
         session.add(site)
         session.flush()
 
-        equipment = Equipment(
+        seh_equipment = Equipment(
             site_id=99903,
             serial_number=f"SN-{db_type}-001",
             name="Test Inverter",
@@ -202,7 +202,7 @@ class TestEquipmentOperations:
             model="SE10000H",
             equipment_type="Inverter",
         )
-        session.add(equipment)
+        session.add(seh_equipment)
         session.flush()
 
         retrieved = session.query(Equipment).filter_by(
@@ -211,8 +211,8 @@ class TestEquipmentOperations:
         assert retrieved is not None
         assert retrieved.name == "Test Inverter"
 
-    def test_upsert_equipment(self, session, db_type):
-        """Test upserting equipment."""
+    def test_upsert_seh_equipment(self, session, db_type):
+        """Test upserting seh_equipment."""
         site = Site(id=99904, name="Equipment Upsert Site")
         session.add(site)
         session.flush()
@@ -220,15 +220,15 @@ class TestEquipmentOperations:
         repo = EquipmentRepository(session)
 
         # Create
-        equipment_data = {
+        seh_equipment_data = {
             "site_id": 99904,
             "serial_number": f"SN-{db_type}-002",
             "name": "Original Name",
             "manufacturer": "SolarEdge",
         }
-        equipment = repo.upsert(equipment_data)
+        seh_equipment = repo.upsert(seh_equipment_data)
         session.flush()
-        assert equipment.name == "Original Name"
+        assert seh_equipment.name == "Original Name"
 
         # Update - need to expire session cache
         session.expire_all()
@@ -243,8 +243,8 @@ class TestEquipmentOperations:
         session.expire_all()
 
         # Refetch to verify
-        equipment = repo.get_by_serial(f"SN-{db_type}-002")
-        assert equipment.name == "Updated Name"
+        seh_equipment = repo.get_by_serial(f"SN-{db_type}-002")
+        assert seh_equipment.name == "Updated Name"
 
 
 class TestEnergyOperations:
@@ -314,7 +314,7 @@ class TestAlertOperations:
     """Test Alert operations across backends."""
 
     def test_upsert_alert(self, session, db_type):
-        """Test upserting alerts."""
+        """Test upserting seh_alerts."""
         site = Site(id=99907, name="Alert Test Site")
         session.add(site)
         session.flush()
@@ -358,7 +358,7 @@ class TestAlertOperations:
 class TestSyncMetadata:
     """Test SyncMetadata operations across backends."""
 
-    def test_sync_metadata_tracking(self, session, db_type):
+    def test_seh_sync_metadata_tracking(self, session, db_type):
         """Test sync metadata tracking."""
         site = Site(id=99908, name="Metadata Test Site")
         session.add(site)
@@ -456,7 +456,7 @@ class TestCascadeDeletes:
         session.add(site)
         session.flush()
 
-        equipment = Equipment(
+        seh_equipment = Equipment(
             site_id=99999,
             serial_number=f"CASCADE-{db_type}",
             name="Cascade Test Inverter",
@@ -467,7 +467,7 @@ class TestCascadeDeletes:
             time_unit="DAY",
             energy_wh=1000.0,
         )
-        session.add_all([equipment, reading])
+        session.add_all([seh_equipment, reading])
         session.flush()
 
         # Delete site

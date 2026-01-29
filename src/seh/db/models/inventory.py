@@ -9,11 +9,11 @@ from seh.db.base import Base, TimestampMixin
 class InventoryItem(Base, TimestampMixin):
     """Inventory item for a site."""
 
-    __tablename__ = "inventory"
+    __tablename__ = "seh_inventory"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # Item identification

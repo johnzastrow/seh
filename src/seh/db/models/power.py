@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class PowerReading(Base, TimestampMixin):
     """Power reading at a point in time (typically 15-minute intervals)."""
 
-    __tablename__ = "power_readings"
+    __tablename__ = "seh_power_readings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
@@ -36,11 +36,11 @@ class PowerReading(Base, TimestampMixin):
 class PowerFlow(Base, TimestampMixin):
     """Power flow snapshot showing PV, grid, load, and storage power."""
 
-    __tablename__ = "power_flows"
+    __tablename__ = "seh_power_flows"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True

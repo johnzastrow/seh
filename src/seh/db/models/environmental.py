@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class EnvironmentalBenefits(Base, TimestampMixin):
     """Environmental benefits data for a site."""
 
-    __tablename__ = "environmental_benefits"
+    __tablename__ = "seh_environmental_benefits"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # Gas emission savings

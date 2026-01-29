@@ -3,12 +3,12 @@
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
-# View definitions for each database type
-# SQLite and PostgreSQL use similar syntax, MariaDB may differ slightly
+# View definitions - SQLite compatible (default)
+# Views with ROUND will be overridden for PostgreSQL and MySQL
 
 VIEWS = {
-    "v_site_summary": """
-        CREATE VIEW IF NOT EXISTS v_site_summary AS
+    "v_seh_site_summary": """
+        CREATE VIEW IF NOT EXISTS v_seh_site_summary AS
         SELECT
             s.id AS site_id,
             s.name AS site_name,
@@ -24,10 +24,10 @@ VIEWS = {
             s.primary_module_model,
             s.created_at,
             s.updated_at
-        FROM sites s
+        FROM seh_sites s
     """,
-    "v_daily_energy": """
-        CREATE VIEW IF NOT EXISTS v_daily_energy AS
+    "v_seh_daily_energy": """
+        CREATE VIEW IF NOT EXISTS v_seh_daily_energy AS
         SELECT
             e.id,
             e.site_id,
@@ -37,12 +37,12 @@ VIEWS = {
             e.energy_wh,
             ROUND(e.energy_wh / 1000.0, 2) AS energy_kwh,
             e.created_at
-        FROM energy_readings e
-        JOIN sites s ON e.site_id = s.id
+        FROM seh_energy_readings e
+        JOIN seh_sites s ON e.site_id = s.id
         ORDER BY e.site_id, e.reading_date DESC
     """,
-    "v_latest_power": """
-        CREATE VIEW IF NOT EXISTS v_latest_power AS
+    "v_seh_latest_power": """
+        CREATE VIEW IF NOT EXISTS v_seh_latest_power AS
         SELECT
             p.id,
             p.site_id,
@@ -51,16 +51,16 @@ VIEWS = {
             p.power_watts,
             ROUND(p.power_watts / 1000.0, 2) AS power_kw,
             p.created_at
-        FROM power_readings p
-        JOIN sites s ON p.site_id = s.id
+        FROM seh_power_readings p
+        JOIN seh_sites s ON p.site_id = s.id
         WHERE p.timestamp = (
             SELECT MAX(p2.timestamp)
-            FROM power_readings p2
+            FROM seh_power_readings p2
             WHERE p2.site_id = p.site_id
         )
     """,
-    "v_power_flow_current": """
-        CREATE VIEW IF NOT EXISTS v_power_flow_current AS
+    "v_seh_power_flow_current": """
+        CREATE VIEW IF NOT EXISTS v_seh_power_flow_current AS
         SELECT
             pf.id,
             pf.site_id,
@@ -77,16 +77,16 @@ VIEWS = {
             pf.storage_power,
             pf.storage_charge_level,
             pf.created_at
-        FROM power_flows pf
-        JOIN sites s ON pf.site_id = s.id
+        FROM seh_power_flows pf
+        JOIN seh_sites s ON pf.site_id = s.id
         WHERE pf.timestamp = (
             SELECT MAX(pf2.timestamp)
-            FROM power_flows pf2
+            FROM seh_power_flows pf2
             WHERE pf2.site_id = pf.site_id
         )
     """,
-    "v_sync_status": """
-        CREATE VIEW IF NOT EXISTS v_sync_status AS
+    "v_seh_sync_status": """
+        CREATE VIEW IF NOT EXISTS v_seh_sync_status AS
         SELECT
             sm.id,
             sm.site_id,
@@ -98,12 +98,12 @@ VIEWS = {
             sm.status,
             sm.error_message,
             sm.updated_at
-        FROM sync_metadata sm
-        JOIN sites s ON sm.site_id = s.id
+        FROM seh_sync_metadata sm
+        JOIN seh_sites s ON sm.site_id = s.id
         ORDER BY sm.site_id, sm.data_type
     """,
-    "v_equipment_list": """
-        CREATE VIEW IF NOT EXISTS v_equipment_list AS
+    "v_seh_equipment_list": """
+        CREATE VIEW IF NOT EXISTS v_seh_equipment_list AS
         SELECT
             e.id,
             e.site_id,
@@ -117,12 +117,12 @@ VIEWS = {
             e.connected_optimizers,
             e.last_report_date,
             e.created_at
-        FROM equipment e
-        JOIN sites s ON e.site_id = s.id
+        FROM seh_equipment e
+        JOIN seh_sites s ON e.site_id = s.id
         ORDER BY e.site_id, e.equipment_type, e.name
     """,
-    "v_battery_status": """
-        CREATE VIEW IF NOT EXISTS v_battery_status AS
+    "v_seh_battery_status": """
+        CREATE VIEW IF NOT EXISTS v_seh_battery_status AS
         SELECT
             b.id,
             b.site_id,
@@ -140,53 +140,86 @@ VIEWS = {
             b.lifetime_energy_charged,
             b.lifetime_energy_discharged,
             b.created_at
-        FROM batteries b
-        JOIN sites s ON b.site_id = s.id
+        FROM seh_batteries b
+        JOIN seh_sites s ON b.site_id = s.id
         ORDER BY b.site_id, b.name
     """,
-    "v_energy_monthly": """
-        CREATE VIEW IF NOT EXISTS v_energy_monthly AS
+    "v_seh_energy_monthly": """
+        CREATE VIEW IF NOT EXISTS v_seh_energy_monthly AS
         SELECT
             site_id,
             strftime('%Y-%m', reading_date) AS month,
             SUM(energy_wh) AS total_wh,
             ROUND(SUM(energy_wh) / 1000.0, 2) AS total_kwh,
             COUNT(*) AS days_with_data
-        FROM energy_readings
+        FROM seh_energy_readings
         WHERE time_unit = 'DAY'
         GROUP BY site_id, strftime('%Y-%m', reading_date)
         ORDER BY site_id, month DESC
     """,
 }
 
-# PostgreSQL-specific versions (uses different date functions)
+# PostgreSQL-specific versions (uses CAST for ROUND and TO_CHAR for dates)
 VIEWS_POSTGRESQL = {
-    "v_energy_monthly": """
-        CREATE OR REPLACE VIEW v_energy_monthly AS
+    "v_seh_daily_energy": """
+        CREATE OR REPLACE VIEW v_seh_daily_energy AS
+        SELECT
+            e.id,
+            e.site_id,
+            s.name AS site_name,
+            e.reading_date,
+            e.time_unit,
+            e.energy_wh,
+            ROUND(CAST(e.energy_wh / 1000.0 AS numeric), 2) AS energy_kwh,
+            e.created_at
+        FROM seh_energy_readings e
+        JOIN seh_sites s ON e.site_id = s.id
+        ORDER BY e.site_id, e.reading_date DESC
+    """,
+    "v_seh_latest_power": """
+        CREATE OR REPLACE VIEW v_seh_latest_power AS
+        SELECT
+            p.id,
+            p.site_id,
+            s.name AS site_name,
+            p.timestamp,
+            p.power_watts,
+            ROUND(CAST(p.power_watts / 1000.0 AS numeric), 2) AS power_kw,
+            p.created_at
+        FROM seh_power_readings p
+        JOIN seh_sites s ON p.site_id = s.id
+        WHERE p.timestamp = (
+            SELECT MAX(p2.timestamp)
+            FROM seh_power_readings p2
+            WHERE p2.site_id = p.site_id
+        )
+    """,
+    "v_seh_energy_monthly": """
+        CREATE OR REPLACE VIEW v_seh_energy_monthly AS
         SELECT
             site_id,
             TO_CHAR(reading_date, 'YYYY-MM') AS month,
             SUM(energy_wh) AS total_wh,
-            ROUND(SUM(energy_wh) / 1000.0, 2) AS total_kwh,
+            ROUND(CAST(SUM(energy_wh) / 1000.0 AS numeric), 2) AS total_kwh,
             COUNT(*) AS days_with_data
-        FROM energy_readings
+        FROM seh_energy_readings
         WHERE time_unit = 'DAY'
         GROUP BY site_id, TO_CHAR(reading_date, 'YYYY-MM')
         ORDER BY site_id, month DESC
     """,
 }
 
-# MariaDB/MySQL-specific versions (uses DATE_FORMAT)
+# MariaDB/MySQL-specific versions (uses DATE_FORMAT for dates)
 VIEWS_MYSQL = {
-    "v_energy_monthly": """
-        CREATE VIEW v_energy_monthly AS
+    "v_seh_energy_monthly": """
+        CREATE VIEW v_seh_energy_monthly AS
         SELECT
             site_id,
             DATE_FORMAT(reading_date, '%Y-%m') AS month,
             SUM(energy_wh) AS total_wh,
             ROUND(SUM(energy_wh) / 1000.0, 2) AS total_kwh,
             COUNT(*) AS days_with_data
-        FROM energy_readings
+        FROM seh_energy_readings
         WHERE time_unit = 'DAY'
         GROUP BY site_id, DATE_FORMAT(reading_date, '%Y-%m')
         ORDER BY site_id, month DESC

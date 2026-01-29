@@ -11,7 +11,7 @@ from seh.db.base import Base, TimestampMixin
 class Site(Base, TimestampMixin):
     """SolarEdge installation site."""
 
-    __tablename__ = "sites"
+    __tablename__ = "seh_sites"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

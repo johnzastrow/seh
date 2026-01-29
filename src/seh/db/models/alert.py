@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class Alert(Base, TimestampMixin):
     """System alert for a site."""
 
-    __tablename__ = "alerts"
+    __tablename__ = "seh_alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     # Alert identification

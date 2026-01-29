@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class OptimizerTelemetry(Base, TimestampMixin):
     """Power optimizer telemetry data."""
 
-    __tablename__ = "optimizer_telemetry"
+    __tablename__ = "seh_optimizer_telemetry"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
     serial_number: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
     inverter_serial: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)

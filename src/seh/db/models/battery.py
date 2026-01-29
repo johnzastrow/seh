@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class Battery(Base, TimestampMixin):
     """Battery/storage unit associated with a site."""
 
-    __tablename__ = "batteries"
+    __tablename__ = "seh_batteries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
     serial_number: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)

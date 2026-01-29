@@ -11,11 +11,11 @@ from seh.db.base import Base, TimestampMixin
 class EnergyReading(Base, TimestampMixin):
     """Energy production reading (daily or monthly)."""
 
-    __tablename__ = "energy_readings"
+    __tablename__ = "seh_energy_readings"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     site_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("sites.id", ondelete="CASCADE"), nullable=False, index=True
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
     )
     reading_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     time_unit: Mapped[str] = mapped_column(
