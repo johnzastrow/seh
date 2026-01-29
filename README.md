@@ -18,12 +18,24 @@ Download your data from SolarEdge monitoring servers and store it in a relationa
 - **Configurable error handling**: Strict, lenient, or skip modes for error handling
 - **Site filtering**: Sync specific sites by ID
 
-## Installation
+### Requirements
+
+- Python 3.11+
+- [uv](https://github.com/astral-sh/uv) package manager
+- SolarEdge API key (from your monitoring portal)
+- Relational database (SQLite, PostgreSQL, or MariaDB)
+
+
+## Installation and Quick Start
+
 
 ```bash
+# 1. Clone and install
+git clone https://github.com/johnzastrow/seh.git
+cd seh
+
 # Install with uv (recommended)
 uv sync
-
 # For PostgreSQL support
 uv sync --extra postgresql
 
@@ -35,21 +47,7 @@ uv sync --extra all-databases
 
 # For Excel export support
 uv pip install openpyxl
-```
 
-### Requirements
-
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) package manager
-- SolarEdge API key (from your monitoring portal)
-
-## Quick Start
-
-```bash
-# 1. Clone and install
-git clone https://github.com/johnzastrow/seh.git
-cd seh
-uv sync
 
 # 2. Configure
 cp .env.example .env
