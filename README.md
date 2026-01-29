@@ -451,6 +451,29 @@ sudo apt-get install libmariadb-dev
 uv sync --extra mariadb
 ```
 
+### Known issues
+
+For Mariadb this error is thrown when setting up the database:
+
+
+```bash
+❯ uv run seh init-db
+Initializing database...
+  Database: localhost:3306/solar
+/home/jcz/seh/seh/.venv/lib/python3.12/site-packages/mariadb/connectionpool.py:30: SyntaxWarning: invalid escape sequence '\*'
+  """
+  Tables created
+  Views created
+```
+
+This warning is coming from the mariadb connector library itself, not from your code. The database initialization
+  actually completed successfully (you can see "Tables created" and "Views created" at the end). The warning is a known issue in the mariadb Python package where they have an unescaped \* in a docstring at line 30
+  of connectionpool.py. This is a bug in the third-party library that should be \\* or use a raw string. You can verify the issue is with the library by checking their source:
+  head -35 .venv/lib/python3.12/site-packages/mariadb/connectionpool.py
+
+  The fix would need to come from the mariadb package maintainers.
+  
+
 ## What's Not Yet Implemented
 
 See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items remaining:
@@ -499,4 +522,7 @@ MIT
 
 - [SolarEdge Monitoring API Documentation](https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf)
 - [SolarEdge Monitoring Portal](https://monitoring.solaredge.com/)
+
+- 
+
 
