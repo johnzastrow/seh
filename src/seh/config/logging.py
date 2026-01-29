@@ -405,7 +405,7 @@ def configure_logging(settings: Settings) -> None:
     # Determine if we're in a TTY for colored output
     is_tty = sys.stdout.isatty()
 
-    # Configure processors based on environment
+    # Shared processors for initial processing
     shared_processors: list[structlog.types.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
@@ -413,27 +413,38 @@ def configure_logging(settings: Settings) -> None:
         structlog.stdlib.ExtraAdder(),
     ]
 
-    if is_tty:
-        # Development: colored console output
-        processors: list[structlog.types.Processor] = [
-            *shared_processors,
-            structlog.dev.ConsoleRenderer(colors=True),
-        ]
-    else:
-        # Production: JSON output
-        processors = [
-            *shared_processors,
-            structlog.processors.dict_tracebacks,
-            structlog.processors.JSONRenderer(),
-        ]
-
+    # Configure structlog to use stdlib logging (so file handler receives logs)
     structlog.configure(
-        processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(log_level),
+        processors=[
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
+
+    # Configure formatter for stdlib logging handlers
+    if is_tty:
+        # Development: colored console output
+        formatter = structlog.stdlib.ProcessorFormatter(
+            processor=structlog.dev.ConsoleRenderer(colors=True),
+            foreign_pre_chain=shared_processors,
+        )
+    else:
+        # Production: JSON output
+        formatter = structlog.stdlib.ProcessorFormatter(
+            processor=structlog.processors.JSONRenderer(),
+            foreign_pre_chain=[
+                *shared_processors,
+                structlog.processors.dict_tracebacks,
+            ],
+        )
+
+    # Apply formatter to all handlers
+    for handler in handlers:
+        handler.setFormatter(formatter)
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

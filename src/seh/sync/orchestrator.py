@@ -104,9 +104,35 @@ class SyncOrchestrator:
             if not site_id:
                 continue
 
-            result = await self.sync_site(site_id, full=full)
-            result.site_name = site_name
-            results.append(result)
+            try:
+                result = await self.sync_site(site_id, full=full)
+                result.site_name = site_name
+                results.append(result)
+            except Exception as e:
+                # In strict mode, sync_site raises on first error
+                if self.settings.error_handling == "strict":
+                    logger.error(
+                        "Sync aborted due to strict error handling",
+                        site_id=site_id,
+                        error=str(e),
+                    )
+                    raise
+                # For other modes this shouldn't happen, but handle gracefully
+                logger.error(
+                    "Unexpected error during site sync",
+                    site_id=site_id,
+                    error=str(e),
+                )
+                results.append(
+                    SyncResult(
+                        site_id=site_id,
+                        site_name=site_name,
+                        success=False,
+                        records_synced={},
+                        errors={"sync": str(e)},
+                        duration_seconds=0,
+                    )
+                )
 
         # Calculate summary
         successful = sum(1 for r in results if r.success)
@@ -170,14 +196,31 @@ class SyncOrchestrator:
                     count = await strategy.sync(site_id, full=full)
                     records_synced[strategy.data_type] = count
                 except Exception as e:
-                    logger.error(
-                        "Strategy sync failed",
-                        site_id=site_id,
-                        data_type=strategy.data_type,
-                        error=str(e),
-                    )
-                    errors[strategy.data_type] = str(e)
-                    records_synced[strategy.data_type] = 0
+                    error_mode = self.settings.error_handling
+
+                    if error_mode == "strict":
+                        # Fail immediately on first error
+                        logger.error(
+                            "Strategy sync failed (strict mode - aborting)",
+                            site_id=site_id,
+                            data_type=strategy.data_type,
+                            error=str(e),
+                        )
+                        raise
+                    elif error_mode == "skip":
+                        # Silent skip - no logging
+                        errors[strategy.data_type] = str(e)
+                        records_synced[strategy.data_type] = 0
+                    else:
+                        # Lenient mode (default) - log and continue
+                        logger.error(
+                            "Strategy sync failed",
+                            site_id=site_id,
+                            data_type=strategy.data_type,
+                            error=str(e),
+                        )
+                        errors[strategy.data_type] = str(e)
+                        records_synced[strategy.data_type] = 0
 
         duration = (datetime.now() - start_time).total_seconds()
 
