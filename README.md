@@ -70,6 +70,7 @@ uv run seh status
 uv run seh status --diagnostics
 
 # Incremental sync - the command to setup with a cron job. Maybe hourly
+# cd /home/user/seh && /home/user/.local/bin/uv run seh sync for the full cron entry
 uv run seh sync
 ```
 
@@ -533,6 +534,7 @@ MIT
 - [SolarEdge Monitoring Portal](https://monitoring.solaredge.com/)
 
 - 
+
 
 
 
