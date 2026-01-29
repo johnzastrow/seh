@@ -28,6 +28,7 @@ Download your data from SolarEdge monitoring servers and store it in a relationa
 
 ## Installation and Quick Start
 
+Run through these in order to see the app working. Then  setup your cron job to run regularly.
 
 ```bash
 # 1. Clone and install
@@ -48,20 +49,28 @@ uv sync --extra all-databases
 # For Excel export support
 uv pip install openpyxl
 
-
 # 2. Configure
 cp .env.example .env
-# Edit .env and add your SEH_API_KEY
+# Edit .env and add your SEH_API_KEY and other items
 
 # 3. Initialize database and verify API access
 uv run seh init-db
 uv run seh check-api
 
 # 4. Run initial full sync
+uv run seh sync
+
+# then do a --full to see the differences
 uv run seh sync --full
 
 # 5. Check status
 uv run seh status
+
+# Full diagnostics (API health, DB status, rate limits)
+uv run seh status --diagnostics
+
+# Incremental sync - the command to setup with a cron job. Maybe hourly
+uv run seh sync
 ```
 
 ## Configuration
@@ -524,5 +533,6 @@ MIT
 - [SolarEdge Monitoring Portal](https://monitoring.solaredge.com/)
 
 - 
+
 
 
