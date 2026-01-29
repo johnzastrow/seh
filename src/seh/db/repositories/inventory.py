@@ -27,14 +27,14 @@ class InventoryRepository(BaseRepository[InventoryItem]):
         return list(self.session.scalars(stmt).all())
 
     def get_by_name_serial(
-        self, site_id: int, name: str, serial_number: str | None
+        self, site_id: int, name: str, serial_number: str
     ) -> InventoryItem | None:
         """Get inventory item by site, name, and serial number.
 
         Args:
             site_id: Site ID.
             name: Item name.
-            serial_number: Item serial number.
+            serial_number: Item serial number (empty string if none).
 
         Returns:
             InventoryItem or None.
@@ -81,5 +81,5 @@ class InventoryRepository(BaseRepository[InventoryItem]):
         self.session.flush()
 
         return self.get_by_name_serial(
-            data["site_id"], data["name"], data.get("serial_number")
+            data["site_id"], data["name"], data.get("serial_number", "")
         )  # type: ignore

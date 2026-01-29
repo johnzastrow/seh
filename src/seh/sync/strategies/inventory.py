@@ -54,7 +54,7 @@ class InventorySyncStrategy(BaseSyncStrategy):
                         "name": name,
                         "manufacturer": item.get("manufacturer"),
                         "model": item.get("model"),
-                        "serial_number": item.get("SN") or item.get("serialNumber"),
+                        "serial_number": item.get("SN") or item.get("serialNumber") or "",
                         "category": category,
                         "firmware_version": item.get("firmwareVersion"),
                         "connected_optimizers": item.get("connectedOptimizers"),
