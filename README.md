@@ -1,5 +1,10 @@
 # SolarEdge Harvest (seh)
 
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![GitHub release](https://img.shields.io/github/v/release/johnzastrow/seh)](https://github.com/johnzastrow/seh/releases)
+[![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 Download your data from SolarEdge monitoring servers and store it in a relational database.
 
 ## Features
