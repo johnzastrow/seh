@@ -425,16 +425,16 @@ def configure_logging(settings: Settings) -> None:
         cache_logger_on_first_use=True,
     )
 
-    # Configure formatter for stdlib logging handlers
+    # Create formatters - console may be colored, file is always JSON
     if is_tty:
         # Development: colored console output
-        formatter = structlog.stdlib.ProcessorFormatter(
+        console_formatter = structlog.stdlib.ProcessorFormatter(
             processor=structlog.dev.ConsoleRenderer(colors=True),
             foreign_pre_chain=shared_processors,
         )
     else:
-        # Production: JSON output
-        formatter = structlog.stdlib.ProcessorFormatter(
+        # Production: JSON output for console
+        console_formatter = structlog.stdlib.ProcessorFormatter(
             processor=structlog.processors.JSONRenderer(),
             foreign_pre_chain=[
                 *shared_processors,
@@ -442,9 +442,19 @@ def configure_logging(settings: Settings) -> None:
             ],
         )
 
-    # Apply formatter to all handlers
-    for handler in handlers:
-        handler.setFormatter(formatter)
+    # File formatter is always JSON (no ANSI color codes)
+    file_formatter = structlog.stdlib.ProcessorFormatter(
+        processor=structlog.processors.JSONRenderer(),
+        foreign_pre_chain=[
+            *shared_processors,
+            structlog.processors.dict_tracebacks,
+        ],
+    )
+
+    # Apply appropriate formatter to each handler
+    console_handler.setFormatter(console_formatter)
+    if settings.log_file:
+        file_handler.setFormatter(file_formatter)
 
 
 def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:

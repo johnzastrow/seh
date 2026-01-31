@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!-- Outer sun rays - light yellow, sharp triangles -->
+  <g fill="#FCC315">
+    <!-- Top -->
+    <polygon points="100,5 95,45 105,45"/>
+    <!-- Upper left quadrant -->
+    <polygon points="85,8 87,46 95,42"/>
+    <polygon points="70,15 80,48 89,42"/>
+    <polygon points="56,25 72,52 82,44"/>
+    <polygon points="44,38 65,58 76,48"/>
+    <polygon points="34,54 58,66 70,54"/>
+    <polygon points="26,72 52,76 64,62"/>
+    <polygon points="22,92 50,88 60,72"/>
+    <polygon points="22,112 52,100 60,84"/>
+    <polygon points="28,132 56,112 64,96"/>
+    <polygon points="38,150 62,124 70,108"/>
+    <!-- Upper right quadrant -->
+    <polygon points="115,8 113,46 105,42"/>
+    <polygon points="130,15 120,48 111,42"/>
+    <polygon points="144,25 128,52 118,44"/>
+    <polygon points="156,38 135,58 124,48"/>
+    <polygon points="166,54 142,66 130,54"/>
+    <polygon points="174,72 148,76 136,62"/>
+    <polygon points="178,92 150,88 140,72"/>
+    <polygon points="178,112 148,100 140,84"/>
+    <polygon points="172,132 144,112 136,96"/>
+    <polygon points="162,150 138,124 130,108"/>
+  </g>
+
+  <!-- Wheat head - darker golden, grains radiating outward -->
+  <g fill="#E8A000">
+    <!-- Top grain (pointed tip) -->
+    <path d="M100,40 L94,58 L100,70 L106,58 Z"/>
+
+    <!-- Row 1 - grains radiating outward -->
+    <path d="M100,58 L88,52 L76,62 L88,72 Z"/>
+    <path d="M100,58 L112,52 L124,62 L112,72 Z"/>
+
+    <!-- Row 2 -->
+    <path d="M100,72 L84,68 L68,82 L84,92 Z"/>
+    <path d="M100,72 L116,68 L132,82 L116,92 Z"/>
+
+    <!-- Row 3 -->
+    <path d="M100,88 L82,86 L64,104 L82,112 Z"/>
+    <path d="M100,88 L118,86 L136,104 L118,112 Z"/>
+
+    <!-- Row 4 -->
+    <path d="M100,106 L84,106 L70,124 L86,130 Z"/>
+    <path d="M100,106 L116,106 L130,124 L114,130 Z"/>
+
+    <!-- Row 5 -->
+    <path d="M100,124 L88,126 L80,140 L90,144 Z"/>
+    <path d="M100,124 L112,126 L120,140 L110,144 Z"/>
+
+    <!-- Row 6 (small) -->
+    <path d="M100,140 L92,144 L88,154 L94,156 Z"/>
+    <path d="M100,140 L108,144 L112,154 L106,156 Z"/>
+
+    <!-- Central stem overlay -->
+    <path d="M97,55 L97,158 L103,158 L103,55 Z" fill="#D08800"/>
+
+    <!-- Base tail - two prongs curving out -->
+    <path d="M97,158 L94,168 L88,182 L94,180 L98,165 Z" fill="#D08800"/>
+    <path d="M103,158 L106,168 L112,182 L106,180 L102,165 Z" fill="#D08800"/>
+  </g>
+</svg>

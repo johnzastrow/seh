@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
+  <!--
+    Simplified version of logo5
+    - Flat colors (no gradients)
+    - Clean paths with minimal control points
+    - Maintains sun-ray + wheat-grain dual radiating design
+  -->
+
+  <!-- Outer sun rays - light yellow -->
+  <g fill="#FED501">
+    <!-- Top ray -->
+    <polygon points="100,16 96,46 104,46"/>
+
+    <!-- Left side rays (top to bottom) -->
+    <polygon points="88,18 90,47 96,44"/>
+    <polygon points="76,22 84,50 91,45"/>
+    <polygon points="64,28 78,54 86,47"/>
+    <polygon points="54,38 72,60 81,51"/>
+    <polygon points="44,50 66,68 76,57"/>
+    <polygon points="36,64 60,76 71,64"/>
+    <polygon points="30,80 56,86 66,72"/>
+    <polygon points="28,96 54,96 64,82"/>
+    <polygon points="28,112 56,106 64,92"/>
+    <polygon points="32,128 58,116 66,102"/>
+    <polygon points="40,144 62,126 70,112"/>
+
+    <!-- Right side rays (top to bottom) -->
+    <polygon points="112,18 110,47 104,44"/>
+    <polygon points="124,22 116,50 109,45"/>
+    <polygon points="136,28 122,54 114,47"/>
+    <polygon points="146,38 128,60 119,51"/>
+    <polygon points="156,50 134,68 124,57"/>
+    <polygon points="164,64 140,76 129,64"/>
+    <polygon points="170,80 144,86 134,72"/>
+    <polygon points="172,96 146,96 136,82"/>
+    <polygon points="172,112 144,106 136,92"/>
+    <polygon points="168,128 142,116 134,102"/>
+    <polygon points="160,144 138,126 130,112"/>
+  </g>
+
+  <!-- Wheat head - golden amber, grains radiating outward -->
+  <g fill="#E9A000">
+    <!-- Top pointed grain -->
+    <path d="M100,38 Q96,48 100,60 Q104,48 100,38"/>
+
+    <!-- Grain pair 1 -->
+    <path d="M100,52 Q92,54 82,66 Q88,74 100,64 Z"/>
+    <path d="M100,52 Q108,54 118,66 Q112,74 100,64 Z"/>
+
+    <!-- Grain pair 2 -->
+    <path d="M100,66 Q90,70 76,86 Q84,96 100,82 Z"/>
+    <path d="M100,66 Q110,70 124,86 Q116,96 100,82 Z"/>
+
+    <!-- Grain pair 3 -->
+    <path d="M100,84 Q88,90 70,108 Q80,118 100,100 Z"/>
+    <path d="M100,84 Q112,90 130,108 Q120,118 100,100 Z"/>
+
+    <!-- Grain pair 4 -->
+    <path d="M100,102 Q90,108 76,126 Q86,136 100,118 Z"/>
+    <path d="M100,102 Q110,108 124,126 Q114,136 100,118 Z"/>
+
+    <!-- Grain pair 5 -->
+    <path d="M100,120 Q94,126 84,140 Q92,148 100,134 Z"/>
+    <path d="M100,120 Q106,126 116,140 Q108,148 100,134 Z"/>
+
+    <!-- Grain pair 6 (smallest) -->
+    <path d="M100,136 Q96,142 92,152 Q96,156 100,148 Z"/>
+    <path d="M100,136 Q104,142 108,152 Q104,156 100,148 Z"/>
+  </g>
+
+  <!-- Central stem - darker gold -->
+  <path fill="#D08800" d="M98,50 L98,156 L102,156 L102,50 Z"/>
+
+  <!-- Tail prongs - darker gold -->
+  <path fill="#D08800" d="M98,156 Q94,166 88,180 Q94,178 98,164 Z"/>
+  <path fill="#D08800" d="M102,156 Q106,166 112,180 Q106,178 102,164 Z"/>
+</svg>
