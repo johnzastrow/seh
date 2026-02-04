@@ -1,0 +1,26 @@
+[
+  {
+    "site_id": 4813725,
+    "site_name": "Zastrow 14 Woodside",
+    "reading_date": "2026-01-27",
+    "time_unit": "DAY",
+    "energy_wh": 0.0,
+    "energy_kwh": null
+  },
+  {
+    "site_id": 4813725,
+    "site_name": "Zastrow 14 Woodside",
+    "reading_date": "2026-01-28",
+    "time_unit": "DAY",
+    "energy_wh": 578.0,
+    "energy_kwh": 0.58
+  },
+  {
+    "site_id": 4813725,
+    "site_name": "Zastrow 14 Woodside",
+    "reading_date": "2026-01-29",
+    "time_unit": "DAY",
+    "energy_wh": 42457.0,
+    "energy_kwh": 42.46
+  }
+]
