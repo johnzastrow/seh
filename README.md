@@ -5,6 +5,8 @@
 [![GitHub release](https://img.shields.io/github/v/release/johnzastrow/seh)](https://github.com/johnzastrow/seh/releases)
 [![Code style: Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
+![seh logo](docs/images/logo.png)
+
 Download your data from SolarEdge monitoring servers and store it in a relational database.
 
 ## Features
