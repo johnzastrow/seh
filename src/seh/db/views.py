@@ -157,6 +157,18 @@ VIEWS = {
         GROUP BY site_id, strftime('%Y-%m', reading_date)
         ORDER BY site_id, month DESC
     """,
+    "v_seh_hourly_grid_import_kwh": """
+        CREATE VIEW IF NOT EXISTS v_seh_hourly_grid_import_kwh AS
+        SELECT
+            timestamp,
+            DATE(timestamp) AS reading_date,
+            site_id,
+            load_power,
+            pv_power,
+            MAX(load_power - COALESCE(pv_power, 0), 0) AS grid_import_kwh
+        FROM seh_power_flows
+        WHERE load_power IS NOT NULL
+    """,
 }
 
 # PostgreSQL-specific versions (uses CAST for ROUND and TO_CHAR for dates)
@@ -223,6 +235,20 @@ VIEWS_MYSQL = {
         WHERE time_unit = 'DAY'
         GROUP BY site_id, DATE_FORMAT(reading_date, '%Y-%m')
         ORDER BY site_id, month DESC
+    """,
+    "v_seh_hourly_grid_import_kwh": """
+        CREATE VIEW v_seh_hourly_grid_import_kwh AS
+        SELECT
+            timestamp,
+            DATE(timestamp) AS reading_date,
+            YEAR(timestamp) AS yr,
+            WEEK(timestamp, 0) AS wk,
+            site_id,
+            load_power,
+            pv_power,
+            GREATEST(load_power - COALESCE(pv_power, 0), 0) AS grid_import_kwh
+        FROM seh_power_flows
+        WHERE load_power IS NOT NULL
     """,
 }
 
