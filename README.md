@@ -9,6 +9,8 @@
 
 Download your data from SolarEdge monitoring servers and store it in a relational database.
 
+**See the outputs on [this page](https://northredoubt.com/weather/) near the bottom where it says "Residential Solar"**
+
 ## Features
 
 - **Multi-database support**: SQLite (default), PostgreSQL, and MariaDB
@@ -541,6 +543,7 @@ MIT
 - [SolarEdge Monitoring Portal](https://monitoring.solaredge.com/)
 
 - 
+
 
 
 
