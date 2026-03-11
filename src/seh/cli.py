@@ -800,6 +800,10 @@ def sync(ctx: click.Context, full: bool, sites_str: str | None, verbose: bool) -
     except Exception as e:
         console.print(f"[red]Sync failed:[/red] {e}")
         logger.error("Sync failed", error=str(e))
+        notifier.send_notification(
+            subject="[SEH] Sync FAILED",
+            body=f"SolarEdge Harvest sync failed on {mode} run.\n\nError: {e}",
+        )
         raise SystemExit(1) from None
 
 
