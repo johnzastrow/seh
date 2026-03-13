@@ -56,12 +56,12 @@ src/seh/
 │   ├── base.py              # Base, TimestampMixin
 │   ├── engine.py            # create_engine(), get_session(), create_tables()
 │   ├── views.py             # Database view definitions (8 views)
-│   ├── models/              # SQLAlchemy ORM models (14 tables)
+│   ├── models/              # SQLAlchemy ORM models (15 tables)
 │   │   ├── site.py          # Site with relationships
 │   │   ├── equipment.py     # Equipment (inverters, etc.)
 │   │   ├── battery.py       # Battery/storage units
 │   │   ├── energy.py        # EnergyReading (daily Wh)
-│   │   ├── power.py         # PowerReading, PowerFlow
+│   │   ├── power.py         # PowerReading, PowerFlow, PowerDetails
 │   │   ├── meter.py         # Meter, MeterReading
 │   │   ├── alert.py         # Alert notifications
 │   │   ├── environmental.py # EnvironmentalBenefits
@@ -80,6 +80,7 @@ src/seh/
 │       ├── equipment.py     # EquipmentSyncStrategy
 │       ├── energy.py        # EnergySyncStrategy
 │       ├── power.py         # PowerSyncStrategy
+│       ├── power_details.py # PowerDetailsSyncStrategy
 │       ├── storage.py       # StorageSyncStrategy
 │       ├── meter.py         # MeterSyncStrategy
 │       ├── alert.py         # AlertSyncStrategy
@@ -111,7 +112,7 @@ src/seh/
 
 ### Database Schema
 
-14 tables with proper relationships and indexes (all prefixed with `seh_`):
+15 tables with proper relationships and indexes (all prefixed with `seh_`):
 
 | Table | Key Columns | Unique Constraint |
 |-------|-------------|-------------------|
@@ -121,6 +122,7 @@ src/seh/
 | `seh_energy_readings` | id, site_id (FK), reading_date, time_unit | (site_id, reading_date, time_unit) |
 | `seh_power_readings` | id, site_id (FK), timestamp | (site_id, timestamp) |
 | `seh_power_flows` | id, site_id (FK), timestamp | (site_id, timestamp) |
+| `seh_power_details` | id, site_id (FK), timestamp, production_w, consumption_w, self_consumption_w, feed_in_w, purchased_w | (site_id, timestamp) |
 | `seh_meters` | id, site_id (FK), name | (site_id, name) |
 | `seh_meter_readings` | id, meter_id (FK), timestamp | (meter_id, timestamp) |
 | `seh_alerts` | id, site_id (FK), alert_id | (site_id, alert_id) |
@@ -183,11 +185,12 @@ SEH_SITE_IDS=123456,789012  # Optional, syncs all if not set
 
 # Data type filtering (skip unavailable endpoints)
 SEH_SKIP_DATA_TYPES=meter,alert  # Comma-separated list of data types to skip
-# Valid: site, equipment, energy, power, storage, meter, environmental, alert, inventory, inverter_telemetry, optimizer_telemetry
+# Valid: site, equipment, energy, power, power_details, storage, meter, environmental, alert, inventory, inverter_telemetry, optimizer_telemetry
 
 # Sync settings
 SEH_ENERGY_LOOKBACK_DAYS=365
 SEH_POWER_LOOKBACK_DAYS=7
+SEH_POWER_DETAILS_LOOKBACK_DAYS=25  # Max 25 days (API limit: strictly < 1 calendar month)
 SEH_SYNC_OVERLAP_MINUTES=15
 SEH_POWER_TIME_UNIT=QUARTER_OF_AN_HOUR
 
@@ -216,10 +219,10 @@ SEH_NOTIFY_ON_SUCCESS=false
 
 - [x] Multi-database support (SQLite, PostgreSQL, MariaDB)
 - [x] Async API client with rate limiting (3 concurrent, 300/day)
-- [x] All 14 database tables with ORM models
+- [x] All 15 database tables with ORM models
 - [x] 8 database views for common queries
 - [x] Repository pattern with upsert support (ON CONFLICT / ON DUPLICATE KEY)
-- [x] Sync strategies for all data types (11 strategies)
+- [x] Sync strategies for all data types (12 strategies)
 - [x] Incremental sync with overlap buffer
 - [x] CLI with init-db, check-api, sync, status, export commands
 - [x] Comprehensive CLI help text with examples

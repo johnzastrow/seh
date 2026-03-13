@@ -6,68 +6,125 @@ This document describes all data structures in the SolarEdge Harvest (seh) datab
 
 ## Entity Relationship Diagram
 
-```
-                                    +------------------+
-                                    |    seh_sites     |
-                                    +------------------+
-                                    | id (PK)          |
-                                    | name             |
-                                    | status           |
-                                    | peak_power       |
-                                    | timezone         |
-                                    | ...              |
-                                    +--------+---------+
-                                             |
-          +----------------------------------+----------------------------------+
-          |              |           |           |           |                  |
-          v              v           v           v           v                  v
-+------------------+ +------------------+ +------------------+ +------------------+
-|  seh_equipment   | |  seh_batteries   | |seh_energy_readings| |seh_power_readings|
-+------------------+ +------------------+ +------------------+ +------------------+
-| id (PK)          | | id (PK)          | | id (PK)          | | id (PK)          |
-| site_id (FK)     | | site_id (FK)     | | site_id (FK)     | | site_id (FK)     |
-| serial_number    | | serial_number    | | reading_date     | | timestamp        |
-| equipment_type   | | capacity         | | energy_wh        | | power_watts      |
-| ...              | | ...              | | ...              | | ...              |
-+------------------+ +------------------+ +------------------+ +------------------+
+```mermaid
+erDiagram
+    seh_sites {
+        int id PK
+        string name
+        string status
+        float peak_power
+        string timezone
+    }
+    seh_equipment {
+        int id PK
+        int site_id FK
+        string serial_number
+        string equipment_type
+    }
+    seh_batteries {
+        int id PK
+        int site_id FK
+        string serial_number
+        float capacity
+    }
+    seh_energy_readings {
+        int id PK
+        int site_id FK
+        date reading_date
+        float energy_wh
+    }
+    seh_power_readings {
+        int id PK
+        int site_id FK
+        datetime timestamp
+        float power_watts
+    }
+    seh_power_flows {
+        int id PK
+        int site_id FK
+        datetime timestamp
+        float pv_power
+        float grid_power
+        float load_power
+    }
+    seh_power_details {
+        int id PK
+        int site_id FK
+        datetime timestamp
+        float production_w
+        float consumption_w
+        float self_consumption_w
+        float feed_in_w
+        float purchased_w
+    }
+    seh_meters {
+        int id PK
+        int site_id FK
+        string name
+        string meter_type
+    }
+    seh_meter_readings {
+        int id PK
+        int meter_id FK
+        datetime timestamp
+        float power
+        float energy_lifetime
+    }
+    seh_alerts {
+        int id PK
+        int site_id FK
+        string alert_id
+        string severity
+    }
+    seh_environmental_benefits {
+        int id PK
+        int site_id FK
+        float co2_saved
+        float trees_planted
+    }
+    seh_inventory {
+        int id PK
+        int site_id FK
+        string name
+        string category
+    }
+    seh_inverter_telemetry {
+        int id PK
+        int site_id FK
+        string serial_number
+        datetime timestamp
+        float ac_voltage
+        float total_active_power
+    }
+    seh_optimizer_telemetry {
+        int id PK
+        int site_id FK
+        string serial_number
+        datetime timestamp
+        float dc_power
+    }
+    seh_sync_metadata {
+        int id PK
+        int site_id FK
+        string data_type
+        datetime last_sync_time
+        datetime last_data_timestamp
+    }
 
-          +----------------------------------+----------------------------------+
-          |              |           |           |           |                  |
-          v              v           v           v           v                  v
-+------------------+ +------------------+ +------------------+ +------------------+
-| seh_power_flows  | |   seh_meters     | |   seh_alerts     | |  seh_inventory   |
-+------------------+ +------------------+ +------------------+ +------------------+
-| id (PK)          | | id (PK)          | | id (PK)          | | id (PK)          |
-| site_id (FK)     | | site_id (FK)     | | site_id (FK)     | | site_id (FK)     |
-| timestamp        | | name             | | alert_id         | | name             |
-| pv_power         | | meter_type       | | severity         | | category         |
-| grid_power       | | ...              | | ...              | | ...              |
-| ...              | +--------+---------+ +------------------+ +------------------+
-+------------------+          |
-                              v
-          +------------------+------------------+------------------+
-          |                                     |                  |
-          v                                     v                  v
-+------------------+                 +------------------+ +------------------+
-|seh_meter_readings|                 |seh_environmental_| |seh_inverter_     |
-+------------------+                 |    benefits      | |   telemetry      |
-| id (PK)          |                 +------------------+ +------------------+
-| meter_id (FK)    |                 | id (PK)          | | id (PK)          |
-| timestamp        |                 | site_id (FK)     | | site_id (FK)     |
-| power            |                 | co2_saved        | | serial_number    |
-| energy_lifetime  |                 | trees_planted    | | timestamp        |
-| ...              |                 | ...              | | ac_voltage       |
-+------------------+                 +------------------+ | ...              |
-                                                         +------------------+
-                              +------------------+
-                              |seh_sync_metadata |
-                              +------------------+
-                              | id (PK)          |
-                              | site_id (FK)     |
-                              | data_type        |
-                              | last_sync_time   |
-                              | ...              |
-                              +------------------+
+    seh_sites ||--o{ seh_equipment : "has"
+    seh_sites ||--o{ seh_batteries : "has"
+    seh_sites ||--o{ seh_energy_readings : "has"
+    seh_sites ||--o{ seh_power_readings : "has"
+    seh_sites ||--o{ seh_power_flows : "has"
+    seh_sites ||--o{ seh_power_details : "has"
+    seh_sites ||--o{ seh_meters : "has"
+    seh_sites ||--o{ seh_alerts : "has"
+    seh_sites ||--|{ seh_environmental_benefits : "has"
+    seh_sites ||--o{ seh_inventory : "has"
+    seh_sites ||--o{ seh_inverter_telemetry : "has"
+    seh_sites ||--o{ seh_optimizer_telemetry : "has"
+    seh_sites ||--o{ seh_sync_metadata : "tracks"
+    seh_meters ||--o{ seh_meter_readings : "has"
 ```
 
 ---
@@ -217,13 +274,13 @@ Power flow snapshots showing energy distribution between PV, grid, load, and sto
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `unit` | VARCHAR(20) | Yes | Power unit (kW, W) |
 | `grid_status` | VARCHAR(20) | Yes | Grid connection status |
-| `grid_power` | FLOAT | Yes | Grid power (positive=export, negative=import) |
+| `grid_power` | FLOAT | Yes | Grid power (positive=export, negative=import), unit per `unit` column |
 | `pv_status` | VARCHAR(20) | Yes | PV production status |
-| `pv_power` | FLOAT | Yes | PV production power |
+| `pv_power` | FLOAT | Yes | PV production power, unit per `unit` column |
 | `load_status` | VARCHAR(20) | Yes | Load consumption status |
-| `load_power` | FLOAT | Yes | Load consumption power |
+| `load_power` | FLOAT | Yes | Load consumption power, unit per `unit` column |
 | `storage_status` | VARCHAR(20) | Yes | Storage status |
-| `storage_power` | FLOAT | Yes | Storage power (positive=charging) |
+| `storage_power` | FLOAT | Yes | Storage power (positive=charging), unit per `unit` column |
 | `storage_charge_level` | FLOAT | Yes | Battery charge level percentage |
 | `storage_critical` | BOOLEAN | Yes | Battery in critical state |
 | `created_at` | DATETIME | No | Record creation timestamp |
@@ -231,6 +288,34 @@ Power flow snapshots showing energy distribution between PV, grid, load, and sto
 
 **Unique Constraints:** `(site_id, timestamp)`
 **Indexes:** `site_id`, `timestamp`
+
+**Note:** `seh_power_flows` stores real-time snapshots collected at sync time (typically 1 record per sync run). For historical 15-minute time-series data with full power breakdown, see `seh_power_details`.
+
+---
+
+### seh_power_details
+
+Historical 15-minute time-series of five power meter types from the SolarEdge `powerDetails` API endpoint. All values are stored in **Watts** (W).
+
+| Column | Type | Nullable | Description |
+|--------|------|----------|-------------|
+| `id` | INTEGER | No | Primary key (auto-increment) |
+| `site_id` | INTEGER | No | Foreign key to seh_sites.id |
+| `timestamp` | DATETIME | No | 15-minute interval timestamp |
+| `production_w` | FLOAT | Yes | PV output power (W) |
+| `consumption_w` | FLOAT | Yes | Total home load power (W) |
+| `self_consumption_w` | FLOAT | Yes | Solar power used on-site / To Home (W) |
+| `feed_in_w` | FLOAT | Yes | Power exported to grid / To Grid (W) |
+| `purchased_w` | FLOAT | Yes | Power imported from grid / From Grid (W) |
+| `created_at` | DATETIME | No | Record creation timestamp |
+| `updated_at` | DATETIME | No | Record update timestamp |
+
+**Unique Constraints:** `(site_id, timestamp)` named `uq_power_details`
+**Indexes:** `site_id`, `timestamp`
+
+**API Source:** `GET /site/{id}/powerDetails` — limited to strictly less than 1 calendar month per request (25-day chunks used internally).
+
+**Unit note:** The chart layer (`seh_weekly_power_chart.py`) converts W → kW for display.
 
 ---
 
@@ -268,9 +353,9 @@ Time-series readings from meters.
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `power` | FLOAT | Yes | Power in Watts |
 | `energy_lifetime` | FLOAT | Yes | Lifetime energy in Wh |
-| `voltage_l1` | FLOAT | Yes | Phase 1 voltage |
-| `voltage_l2` | FLOAT | Yes | Phase 2 voltage |
-| `voltage_l3` | FLOAT | Yes | Phase 3 voltage |
+| `voltage_l1` | FLOAT | Yes | Phase 1 voltage in Volts |
+| `voltage_l2` | FLOAT | Yes | Phase 2 voltage in Volts |
+| `voltage_l3` | FLOAT | Yes | Phase 3 voltage in Volts |
 | `current_l1` | FLOAT | Yes | Phase 1 current in Amps |
 | `current_l2` | FLOAT | Yes | Phase 2 current in Amps |
 | `current_l3` | FLOAT | Yes | Phase 3 current in Amps |
@@ -318,9 +403,9 @@ Environmental impact calculations for a site.
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
 | `site_id` | INTEGER | No | Foreign key to seh_sites.id |
-| `co2_saved` | FLOAT | Yes | CO2 emissions avoided |
-| `so2_saved` | FLOAT | Yes | SO2 emissions avoided |
-| `nox_saved` | FLOAT | Yes | NOx emissions avoided |
+| `co2_saved` | FLOAT | Yes | CO2 emissions avoided, unit per `co2_units` column |
+| `so2_saved` | FLOAT | Yes | SO2 emissions avoided, unit per `co2_units` column |
+| `nox_saved` | FLOAT | Yes | NOx emissions avoided, unit per `co2_units` column |
 | `co2_units` | VARCHAR(20) | Yes | Unit for emissions (KG, LB) |
 | `trees_planted` | FLOAT | Yes | Equivalent trees planted |
 | `light_bulbs` | FLOAT | Yes | Equivalent light bulb hours |
@@ -384,7 +469,7 @@ Detailed inverter telemetry data at 5-minute intervals.
 | `active_power` | FLOAT | Yes | Active power in Watts |
 | `reactive_power` | FLOAT | Yes | Reactive power in VAR |
 | `cos_phi` | FLOAT | Yes | Power factor (cos phi) |
-| `dc_voltage` | FLOAT | Yes | DC input voltage |
+| `dc_voltage` | FLOAT | Yes | DC input voltage in Volts |
 | `created_at` | DATETIME | No | Record creation timestamp |
 | `updated_at` | DATETIME | No | Record update timestamp |
 
@@ -405,11 +490,11 @@ Power optimizer telemetry data at 5-minute intervals.
 | `inverter_serial` | VARCHAR(50) | Yes | Connected inverter serial |
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `panel_id` | INTEGER | Yes | Panel position identifier |
-| `dc_voltage` | FLOAT | Yes | DC input voltage from panel |
-| `dc_current` | FLOAT | Yes | DC input current from panel |
+| `dc_voltage` | FLOAT | Yes | DC input voltage from panel in Volts |
+| `dc_current` | FLOAT | Yes | DC input current from panel in Amps |
 | `dc_power` | FLOAT | Yes | DC power from panel in Watts |
-| `output_voltage` | FLOAT | Yes | Output voltage to inverter |
-| `output_current` | FLOAT | Yes | Output current to inverter |
+| `output_voltage` | FLOAT | Yes | Output voltage to inverter in Volts |
+| `output_current` | FLOAT | Yes | Output current to inverter in Amps |
 | `output_power` | FLOAT | Yes | Output power to inverter in Watts |
 | `energy` | FLOAT | Yes | Energy produced in Wh |
 | `lifetime_energy` | FLOAT | Yes | Lifetime energy in Wh |
@@ -448,6 +533,7 @@ Tracks synchronization state for each data type per site.
 - `equipment` - Equipment list
 - `energy` - Energy readings
 - `power` - Power readings
+- `power_details` - Historical 15-minute power breakdown (production, consumption, grid, solar)
 - `storage` - Battery data
 - `meter` - Meter data
 - `environmental` - Environmental benefits
@@ -679,3 +765,12 @@ All child tables use `ON DELETE CASCADE` for the site relationship, meaning dele
 | Temperature | Celsius (C) | |
 | Charge Level | Percentage (%) | 0-100 |
 | Power Factor | Ratio | -1 to 1 |
+
+---
+
+## Changelog
+
+| Date | Version | Change |
+|------|---------|--------|
+| 2026-03-13 | 0.2.0 | Added `seh_power_details` table (15-min historical power breakdown from `powerDetails` API endpoint); added `power_details` sync strategy; updated ERD to Mermaid format |
+| 2026-01 | 0.1.x | Initial schema with 14 tables |

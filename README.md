@@ -115,6 +115,7 @@ Configuration is via environment variables or a `.env` file:
 | `SEH_SITE_IDS` | Comma-separated site IDs to sync (syncs all if not set) | - |
 | `SEH_ENERGY_LOOKBACK_DAYS` | Days to look back for energy data on first sync | `365` |
 | `SEH_POWER_LOOKBACK_DAYS` | Days to look back for power data on first sync | `7` |
+| `SEH_POWER_DETAILS_LOOKBACK_DAYS` | Days to look back for powerDetails data on first sync (max 25 due to API limit) | `25` |
 | `SEH_SYNC_OVERLAP_MINUTES` | Overlap buffer for incremental syncs | `15` |
 | `SEH_POWER_TIME_UNIT` | Power data granularity (QUARTER_OF_AN_HOUR, HOUR, DAY, WEEK, MONTH, YEAR) | `QUARTER_OF_AN_HOUR` |
 
@@ -287,7 +288,8 @@ All tables are prefixed with `seh_` to avoid naming conflicts:
 | `seh_batteries` | Storage units with capacity, state of charge, and telemetry |
 | `seh_energy_readings` | Daily/monthly energy production in Wh |
 | `seh_power_readings` | 15-minute power measurements in W |
-| `seh_power_flows` | Current power flow snapshots (PV, grid, load, storage) |
+| `seh_power_flows` | Real-time power flow snapshots (PV, grid, load, storage) — one record per sync |
+| `seh_power_details` | Historical 15-min time series: production, consumption, grid import/export in W |
 | `seh_meters` | Meter devices (production, consumption, etc.) |
 | `seh_meter_readings` | Meter time-series data with voltage, current, power factor |
 | `seh_alerts` | System alerts with severity, codes, and affected components |
@@ -329,6 +331,7 @@ See [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) for complete schema documentation
    - Equipment list
    - Energy readings
    - Power readings + current power flow
+   - Power details (historical 15-min breakdown: production, consumption, grid, solar)
    - Storage/battery data
    - Meter devices and readings
    - Environmental benefits
@@ -371,7 +374,7 @@ src/seh/
 │   ├── base.py              # SQLAlchemy DeclarativeBase
 │   ├── engine.py            # Engine factory for SQLite/PG/MariaDB
 │   ├── views.py             # Database view definitions
-│   ├── models/              # ORM models (14 tables)
+│   ├── models/              # ORM models (15 tables)
 │   └── repositories/        # CRUD with upsert support
 ├── sync/
 │   ├── orchestrator.py      # Coordinates sync across sites
@@ -524,6 +527,19 @@ See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items
 - [x] Alerts sync (with graceful handling for restricted API access)
 - [x] Inventory sync
 - [x] Data export functionality (CSV, JSON)
+
+## Changelog
+
+### v0.2.0 (2026-03-13)
+- Added `seh_power_details` table: historical 15-minute power breakdown (production, consumption, self-consumption, feed-in, purchased) from the `powerDetails` API endpoint
+- Added `PowerDetailsSyncStrategy` (12th sync strategy)
+- Added `SEH_POWER_DETAILS_LOOKBACK_DAYS` setting (default 25; API enforces < 1 calendar month)
+- Updated `seh_weekly_power_chart.py` to use `seh_power_details` as primary data source for accurate grid consumption display
+
+### v0.1.x
+- Initial release with 14 tables and 11 sync strategies
+- Multi-database support (SQLite, PostgreSQL, MariaDB)
+- Email notifications on sync failure
 
 ## License
 
