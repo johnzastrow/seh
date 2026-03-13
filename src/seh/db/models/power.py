@@ -74,3 +74,38 @@ class PowerFlow(Base, TimestampMixin):
 
     def __repr__(self) -> str:
         return f"<PowerFlow(site={self.site_id}, ts={self.timestamp})>"
+
+
+class PowerDetails(Base, TimestampMixin):
+    """Detailed power breakdown at 15-minute intervals from the powerDetails API.
+
+    All power values are in Watts (W), as returned by the SolarEdge API.
+    Unlike PowerFlow (real-time snapshot), this is a historical time series.
+    """
+
+    __tablename__ = "seh_power_details"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    site_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("seh_sites.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+    # Direct meter values from SolarEdge powerDetails endpoint (all in Watts)
+    production_w: Mapped[float | None] = mapped_column(Float, nullable=True)       # PV output
+    consumption_w: Mapped[float | None] = mapped_column(Float, nullable=True)      # Home load
+    self_consumption_w: Mapped[float | None] = mapped_column(Float, nullable=True) # Solar used on-site
+    feed_in_w: Mapped[float | None] = mapped_column(Float, nullable=True)          # Exported to grid
+    purchased_w: Mapped[float | None] = mapped_column(Float, nullable=True)        # Imported from grid
+
+    # Relationship
+    site: Mapped["Site"] = relationship("Site", back_populates="power_details")  # type: ignore[name-defined] # noqa: F821
+
+    __table_args__ = (
+        UniqueConstraint("site_id", "timestamp", name="uq_power_details"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<PowerDetails(site={self.site_id}, ts={self.timestamp}, prod={self.production_w}W)>"

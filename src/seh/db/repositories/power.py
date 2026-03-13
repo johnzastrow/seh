@@ -7,7 +7,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-from seh.db.models.power import PowerFlow, PowerReading
+from seh.db.models.power import PowerDetails, PowerFlow, PowerReading
 from seh.db.repositories.base import BaseRepository
 
 
@@ -186,3 +186,49 @@ class PowerFlowRepository(BaseRepository[PowerFlow]):
             )
         )
         return self.session.scalar(result_stmt)  # type: ignore
+
+
+class PowerDetailsRepository(BaseRepository[PowerDetails]):
+    """Repository for PowerDetails operations (historical 15-min breakdown)."""
+
+    model = PowerDetails
+
+    def upsert_batch(self, readings: list[dict]) -> int:
+        """Insert or update multiple power detail records.
+
+        Args:
+            readings: List of dicts with keys: site_id, timestamp,
+                      production_w, consumption_w, self_consumption_w,
+                      feed_in_w, purchased_w.
+
+        Returns:
+            Number of records affected.
+        """
+        if not readings:
+            return 0
+
+        update_cols = ["production_w", "consumption_w", "self_consumption_w", "feed_in_w", "purchased_w"]
+        dialect = self.session.bind.dialect.name if self.session.bind else "sqlite"
+
+        for reading in readings:
+            update_set = {col: reading.get(col) for col in update_cols}
+
+            if dialect == "postgresql":
+                stmt = pg_insert(PowerDetails).values(**reading)
+                stmt = stmt.on_conflict_do_update(
+                    constraint="uq_power_details",
+                    set_=update_set,
+                )
+            elif dialect in ("mysql", "mariadb"):
+                stmt = mysql_insert(PowerDetails).values(**reading)
+                stmt = stmt.on_duplicate_key_update(**update_set)
+            else:
+                stmt = sqlite_insert(PowerDetails).values(**reading)
+                stmt = stmt.on_conflict_do_update(
+                    index_elements=["site_id", "timestamp"],
+                    set_=update_set,
+                )
+            self.session.execute(stmt)
+
+        self.session.flush()
+        return len(readings)

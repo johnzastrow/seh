@@ -51,6 +51,10 @@ class Settings(BaseSettings):
         default=7,
         description="Days to look back for power data on first sync",
     )
+    power_details_lookback_days: int = Field(
+        default=25,
+        description="Days to look back for powerDetails (consumption/grid breakdown) on first sync",
+    )
     sync_overlap_minutes: int = Field(
         default=15,
         description="Overlap buffer in minutes for incremental syncs",
@@ -142,7 +146,7 @@ class Settings(BaseSettings):
 
     # Valid data types for skip_data_types
     VALID_DATA_TYPES: frozenset[str] = frozenset({
-        "site", "equipment", "energy", "power", "storage", "meter",
+        "site", "equipment", "energy", "power", "power_details", "storage", "meter",
         "environmental", "alert", "inventory", "inverter_telemetry", "optimizer_telemetry"
     })
 

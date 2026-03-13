@@ -19,6 +19,7 @@ from seh.sync.strategies.inverter_telemetry import InverterTelemetrySyncStrategy
 from seh.sync.strategies.meter import MeterSyncStrategy
 from seh.sync.strategies.optimizer_telemetry import OptimizerTelemetrySyncStrategy
 from seh.sync.strategies.power import PowerSyncStrategy
+from seh.sync.strategies.power_details import PowerDetailsSyncStrategy
 from seh.sync.strategies.site import SiteSyncStrategy
 from seh.sync.strategies.storage import StorageSyncStrategy
 
@@ -186,6 +187,7 @@ class SyncOrchestrator:
                 EquipmentSyncStrategy(self.client, session, self.settings),
                 EnergySyncStrategy(self.client, session, self.settings),
                 PowerSyncStrategy(self.client, session, self.settings),
+                PowerDetailsSyncStrategy(self.client, session, self.settings),
                 StorageSyncStrategy(self.client, session, self.settings),
                 MeterSyncStrategy(self.client, session, self.settings),
                 EnvironmentalSyncStrategy(self.client, session, self.settings),

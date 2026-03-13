@@ -64,6 +64,9 @@ class Site(Base, TimestampMixin):
     power_flows: Mapped[list["PowerFlow"]] = relationship(  # type: ignore[name-defined] # noqa: F821
         "PowerFlow", back_populates="site", cascade="all, delete-orphan"
     )
+    power_details: Mapped[list["PowerDetails"]] = relationship(  # type: ignore[name-defined] # noqa: F821
+        "PowerDetails", back_populates="site", cascade="all, delete-orphan"
+    )
     meters: Mapped[list["Meter"]] = relationship(  # type: ignore[name-defined] # noqa: F821
         "Meter", back_populates="site", cascade="all, delete-orphan"
     )
