@@ -34,13 +34,13 @@ dependencies = [
 
 [project.optional-dependencies]
 postgresql = [
-    "psycopg[binary]>=3.1.0",
+    "psycopg[binary]>=3.3.3",
 ]
 mariadb = [
     "mariadb>=1.1.0",
 ]
 all-databases = [
-    "psycopg[binary]>=3.1.0",
+    "psycopg[binary]>=3.3.3",
     "mariadb>=1.1.0",
 ]
 dev = [
