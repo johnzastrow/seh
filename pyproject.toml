@@ -37,11 +37,11 @@ postgresql = [
     "psycopg[binary]>=3.1.0",
 ]
 mariadb = [
-    "mariadb>=1.1.0",
+    "mariadb>=1.1.14",
 ]
 all-databases = [
     "psycopg[binary]>=3.1.0",
-    "mariadb>=1.1.0",
+    "mariadb>=1.1.14",
 ]
 dev = [
     "pytest>=8.0.0",
