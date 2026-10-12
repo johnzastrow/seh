@@ -206,3 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 seh.db
+
+# SolarEdge V2 probe output (tokens and raw site data)
+.seh-probe/
