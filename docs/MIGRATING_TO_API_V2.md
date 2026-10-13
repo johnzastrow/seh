@@ -363,7 +363,8 @@ All other settings (database, lookbacks, skip list, error handling, logging, ema
 | `HTTP 503` "Scheduled V1 deprecation window" | You are still on seh 0.2.x. Upgrade. |
 
 For more detail, run with `-v` (debug logging) or check `SEH_LOG_FILE`. Tokens and secrets are
-never written to logs.
+never written to logs. To see exactly what SolarEdge returns for an endpoint, use
+`seh api get`, for example `uv run seh api get /sites/{site}/alerts` (1 credit).
 
 ---
 

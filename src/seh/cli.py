@@ -252,6 +252,36 @@ grant expires.
 """
 
 
+API_HELP = """
+Low-level access to the SolarEdge Monitoring API V2, for diagnostics.
+
+Uses seh's own sign-in, rate limiting, and monthly credit count. Each request
+costs 1 API credit. Run it where seh normally syncs, because a sign-in must
+only be used on one machine.
+"""
+
+API_GET_HELP = """
+Fetch one V2 resource and print the raw JSON response.
+
+PATH is relative to the V2 base URL. "{site}" in PATH is replaced with --site
+(default: the first ID in SEH_SITE_IDS). Time ranges are not split, so stay
+within SolarEdge's limits (QUARTER_HOUR 1 week, HOUR 24 hours, DAY 1 month)
+and give from/to as UTC instants.
+
+The JSON goes to stdout (or --output); status messages go to stderr, so the
+output can be piped, for example into jq.
+
+EXAMPLES:
+
+\b
+  seh api get /sites/{site}
+  seh api get /sites/{site}/alerts -p alerts-in-page=100
+  seh api get /sites/{site}/storage/telemetry -p resolution=HOUR \\
+      -p from=2026-10-12T00:00:00Z -p to=2026-10-12T12:00:00Z
+  seh api get /sites/{site}/devices -p types=BATTERY -p types=METER -o devices.json
+"""
+
+
 EXPORT_HELP = """
 Export data from the database to files for external analysis.
 
@@ -894,6 +924,85 @@ def auth_logout(ctx: click.Context, yes: bool) -> None:
             "[yellow]Local token file deleted, but SolarEdge did not confirm revocation.[/yellow] "
             "You can also remove access in your SolarEdge account."
         )
+
+
+# =============================================================================
+# Raw API access (diagnostics)
+# =============================================================================
+
+
+@cli.group(help=API_HELP)
+def api() -> None:
+    """Low-level SolarEdge API access."""
+
+
+@api.command("get", help=API_GET_HELP)
+@click.argument("path")
+@click.option(
+    "--param",
+    "-p",
+    "params",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Query parameter (repeatable; repeat a key to send it several times).",
+)
+@click.option("--site", type=int, help="Site ID for {site} in PATH (default: first SEH_SITE_IDS).")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False),
+    help="Write the JSON to this file (created readable only by you) instead of stdout.",
+)
+@click.pass_context
+def api_get(
+    ctx: click.Context, path: str, params: tuple[str, ...], site: int | None, output: str | None
+) -> None:
+    """Print the raw JSON of one V2 request."""
+    from seh.api.client import SolarEdgeClient, validate_raw_path
+    from seh.utils.exceptions import APIError, SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    err = Console(stderr=True)
+
+    query: list[tuple[str, str]] = []
+    for item in params:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            err.print(f"[red]Invalid --param {item!r}: use KEY=VALUE.[/red]")
+            raise SystemExit(2)
+        query.append((key, value))
+
+    try:
+        if "{site}" in path:
+            path = path.replace("{site}", str(site or settings.require_site_ids()[0]))
+        path = validate_raw_path(path)
+
+        async def _get():
+            async with SolarEdgeClient(settings) as client:
+                data = await client.get_raw(path, query)
+                return data, client.credits_used()
+
+        data, usage = run_async(_get())
+    except ValueError as e:
+        err.print(f"[red]{e}[/red]")
+        raise SystemExit(2) from None
+    except APIError as e:
+        err.print(f"[red]Request failed:[/red] {e}")
+        raise SystemExit(1) from None
+    except SEHError as e:
+        err.print(f"[red]{e}[/red]")
+        raise SystemExit(1) from None
+
+    text = json.dumps(data, indent=2, ensure_ascii=False)
+    if output:
+        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+        err.print(f"[green]Wrote {output}[/green]")
+    else:
+        click.echo(text)
+    if usage:
+        err.print(f"[dim]1 API credit used ({usage[1]} this month, {usage[0]}).[/dim]")
 
 
 @cli.command(help=SYNC_HELP)

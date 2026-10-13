@@ -226,6 +226,17 @@ credits; `--no-probe` uses 1). `--update-config` adds unavailable data types to
 uv run seh check-api
 ```
 
+### `seh api get`
+
+Fetch one raw API V2 response, for diagnostics (1 credit per request; uses seh's sign-in,
+so run it on the machine that syncs). `{site}` is replaced with the first `SEH_SITE_IDS`.
+
+```bash
+uv run seh api get /sites/{site}
+uv run seh api get /sites/{site}/alerts -p alerts-in-page=100
+uv run seh api get /sites/{site}/devices -p types=BATTERY -o devices.json
+```
+
 ### `seh sync`
 
 Synchronize data from SolarEdge to the database.
@@ -628,6 +639,7 @@ and troubleshooting, is in **[docs/MIGRATING_TO_API_V2.md](docs/MIGRATING_TO_API
 - Removed `SEH_API_KEY` and `SEH_API_DAILY_LIMIT`
 - Security: `seh export dump` no longer passes the database password on the command line (uses a temporary
   owner-only credentials file), never prints it in errors, and writes the dump file owner-only (0600)
+- Added `seh api get` for raw API responses; removed the throwaway `scripts/probe_v2.py`
 - Fixed: the global `-c/--config` option now loads the given `.env` file (it was silently ignored); `check-api --update-config` writes to that file
 
 ### v0.2.0 (2026-03-13)

@@ -56,7 +56,11 @@ not exist) were deleted on 2026-10-13 (ids 1881-1884).
      second hour overwrites the first (same as V1). Fixing needs a schema change (UTC or offset column).
    - V2 alert and storage (battery) schemas are unverified (no alerts, no battery on this site);
      field names come from a community client. Check `seh_alerts` if an alert ever appears.
-   - Delete `scripts/probe_v2.py` once nothing more needs probing (it is throwaway by design).
+   - ~~Delete `scripts/probe_v2.py`~~ Done: replaced by `seh api get <path>` (raw JSON through seh's
+     client, sign-in and credit ledger). Use it on lamp to capture real alert or battery
+     responses if one ever appears, e.g. `seh api get /sites/{site}/alerts`.
+     The local `.seh-probe/` folder (gitignored) still holds the probe's own token and raw
+     responses; delete it, and optionally remove that grant in the SolarEdge account.
    - Pre-existing mypy errors in `src/seh/sync/orchestrator.py` (dict type args) and a SIM108 lint
      in `config/settings.py:update_env_file` were left untouched.
 
@@ -155,7 +159,7 @@ Response format notes:
 
 **All steps below are done (2026-10-12); step 8 is the deployment described in section 0.**
 
-1. **Probe first.** (Done 2026-10-12.) Write `scripts/probe_v2.py` that authenticates and calls every V2 endpoint
+1. **Probe first.** (Done 2026-10-12; the script was later replaced by `seh api get`.) Write `scripts/probe_v2.py` that authenticates and calls every V2 endpoint
    above for one real site, saving raw JSON to a gitignored folder. Use the output to confirm
    paths, parameters, timestamp format, and response shapes before rewriting anything.
 2. **Settings** (`settings.py`, `.env.example`, README, CLAUDE.md):

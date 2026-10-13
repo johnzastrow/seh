@@ -13,6 +13,7 @@ are ISO-8601 strings with the site's UTC offset, parsed with `parse_timestamp`.
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -41,6 +42,9 @@ MAX_WINDOW: dict[str, timedelta] = {
 
 DEVICE_TYPES = ("INVERTER", "BATTERY", "METER", "OPTIMIZER")
 ALERTS_PAGE_SIZE = 100
+# Paths accepted by get_raw: relative to the V2 base URL, plain path characters only, so the
+# bearer token can never be sent to another host or outside /v2.
+RAW_PATH = re.compile(r"^/[A-Za-z0-9._~/-]*$")
 # On HTTP 429, wait for Retry-After (if this short) and retry, at most this many times.
 MAX_RATE_LIMIT_WAIT = 90.0
 MAX_RATE_LIMIT_RETRIES = 2
@@ -57,6 +61,22 @@ def format_instant(value: TimePoint) -> str:
     seh runs in the site's timezone, as it did with V1.
     """
     return _as_aware(value).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def validate_raw_path(path: str) -> str:
+    """Normalize and check a user-supplied API path for get_raw.
+
+    Rejects full URLs, ".." segments, "//", query strings, and unusual characters.
+    """
+    candidate = path.strip()
+    if not candidate.startswith("/"):
+        candidate = "/" + candidate
+    if "//" in candidate or ".." in candidate.split("/") or not RAW_PATH.fullmatch(candidate):
+        raise ValueError(
+            f"Invalid API path {path!r}: use a path relative to the V2 base URL, such as "
+            "/sites/1234567/alerts, and pass query parameters separately."
+        )
+    return candidate
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -237,6 +257,18 @@ class SolarEdgeClient:
                 response.headers.get("x-ratelimit-remaining-minute")
             )
         return response
+
+    async def get_raw(self, path: str, params: Params | None = None) -> Any:
+        """GET any V2 resource and return the decoded JSON unchanged (for diagnostics).
+
+        Args:
+            path: Path relative to the V2 base URL, e.g. "/sites/123/alerts".
+            params: Query parameters, passed as given (no window splitting).
+
+        Raises:
+            ValueError: If the path is not a plain relative API path.
+        """
+        return await self._request(validate_raw_path(path), params)
 
     def credits_used(self) -> tuple[str, int] | None:
         """(month, API credits used this month) from the shared ledger."""

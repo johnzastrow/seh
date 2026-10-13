@@ -19,6 +19,7 @@ uv run seh --help
 uv run seh --version
 uv run seh init-db
 uv run seh auth login|status|logout
+uv run seh api get /sites/{site}/alerts -p alerts-in-page=100   # raw V2 JSON, 1 credit
 uv run seh check-api
 uv run seh sync [--full] [--sites ID1,ID2]
 uv run seh status [--diagnostics]
