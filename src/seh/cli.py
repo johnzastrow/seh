@@ -202,6 +202,39 @@ OUTPUT COLUMNS:
   Status       - Success, Error, or Partial
 """
 
+AUTH_HELP = """
+Sign in to SolarEdge (Monitoring API V2, OAuth Site Access).
+
+SolarEdge API V2 uses OAuth instead of a static API key. Sign in once with
+'seh auth login'; seh then refreshes its token automatically on every run.
+Tokens are stored in SEH_TOKEN_FILE (default ~/.config/seh/tokens.json) with
+owner-only permissions.
+
+SETUP:
+  1. Create an app at https://developer.solaredge.com/ with Site Access and the
+     redirect URI http://127.0.0.1:8765/callback
+  2. Put its credentials and your site ID in .env:
+       SEH_OAUTH_CLIENT_ID=...
+       SEH_OAUTH_CLIENT_SECRET=...
+       SEH_SITE_IDS=1234567
+  3. Run: seh auth login
+
+HEADLESS SERVERS:
+  The sign-in page redirects your browser to 127.0.0.1:8765, i.e. the machine the
+  browser runs on. To sign in on a server without a browser, forward the port
+  from your desktop first and keep the session open:
+
+    ssh -L 8765:127.0.0.1:8765 user@server
+    seh auth login            (on the server, then open the printed URL locally)
+
+  Or use 'seh auth login --paste' and paste the address of the page the browser
+  lands on (it will fail to load; that is expected).
+
+Signing in again is only needed if seh does not run for 30 days or the 24-month
+grant expires.
+"""
+
+
 EXPORT_HELP = """
 Export data from the database to files for external analysis.
 
@@ -278,7 +311,10 @@ def load_settings(config_path: str | None = None):
         return settings
     except Exception as e:
         console.print(f"[red]Configuration error:[/red] {e}")
-        console.print("\n[yellow]Hint:[/yellow] Create a .env file with SEH_API_KEY=your_key")
+        console.print(
+            "\n[yellow]Hint:[/yellow] Set SEH_OAUTH_CLIENT_ID, SEH_OAUTH_CLIENT_SECRET and "
+            "SEH_SITE_IDS in .env, then run 'seh auth login'."
+        )
         console.print("See .env.example for all available options.")
         raise SystemExit(1) from None
 
@@ -684,6 +720,205 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
         console.print(f"[red]API check failed:[/red] {e}")
         logger.error("API check failed", error=str(e))
         raise SystemExit(1) from None
+
+
+# =============================================================================
+# Authentication (OAuth2 Site Access)
+# =============================================================================
+
+
+def _fail(message: str) -> None:
+    console.print(f"[red]{message}[/red]")
+    raise SystemExit(1)
+
+
+def _browser_available() -> bool:
+    """False on headless Linux/BSD, where opening a browser cannot work."""
+    import sys
+
+    if sys.platform.startswith(("linux", "freebsd", "openbsd")):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
+
+
+@cli.group(help=AUTH_HELP)
+def auth() -> None:
+    """Sign in to SolarEdge."""
+
+
+@auth.command(
+    "login",
+    help="Sign in to SolarEdge and store OAuth tokens. See 'seh auth --help' for headless use.",
+)
+@click.option("--paste", is_flag=True, help="Paste the redirect URL instead of using the local listener.")
+@click.option("--no-browser", is_flag=True, help="Print the sign-in URL without opening a browser.")
+@click.option(
+    "--timeout",
+    type=click.IntRange(30, 1800),
+    default=300,
+    show_default=True,
+    help="Seconds to wait for the sign-in redirect.",
+)
+@click.pass_context
+def auth_login(ctx: click.Context, paste: bool, no_browser: bool, timeout: int) -> None:
+    """Interactive OAuth sign-in."""
+    import threading
+    import webbrowser
+
+    from seh.api.auth import OAuthTokenManager
+    from seh.api.oauth_login import (
+        CallbackResult,
+        LoginRequest,
+        build_authorize_url,
+        ensure_port_free,
+        parse_redirect_url,
+        validate_callback,
+        wait_for_callback,
+    )
+    from seh.utils.exceptions import SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    try:
+        site_ids = settings.require_site_ids()
+        request = LoginRequest.new()
+        url = build_authorize_url(settings, request)
+
+        def validate(query: dict[str, str]) -> CallbackResult:
+            return validate_callback(query, request, site_ids)
+
+        if not paste:
+            ensure_port_free(settings.oauth_redirect_port)
+
+        console.print(
+            "[bold]Sign in to SolarEdge[/bold] and approve access for site(s) "
+            f"{', '.join(map(str, site_ids))}:\n"
+        )
+        console.print(url, soft_wrap=True)
+        console.print()
+
+        open_browser = not no_browser and _browser_available()
+        if paste:
+            if open_browser:
+                webbrowser.open(url)
+            console.print(
+                "After approving, the browser lands on a page that fails to load. "
+                "Copy that page's full address."
+            )
+            # Hidden: the pasted address contains the authorization code.
+            pasted = click.prompt("Paste the address", hide_input=True)
+            result = validate(parse_redirect_url(pasted))
+        else:
+            if not open_browser:
+                port = settings.oauth_redirect_port
+                console.print(
+                    "[yellow]No browser on this machine.[/yellow] Open the URL above on your "
+                    "desktop. If this is a remote server, first run on your desktop:\n"
+                    f"  ssh -L {port}:127.0.0.1:{port} <user>@<this-server>\n"
+                )
+            ready = threading.Event()
+            holder: dict[str, object] = {}
+
+            def listen() -> None:
+                try:
+                    holder["result"] = wait_for_callback(
+                        settings.oauth_redirect_port, timeout, validate, ready
+                    )
+                except Exception as exc:  # re-raised in the main thread
+                    holder["error"] = exc
+
+            thread = threading.Thread(target=listen, daemon=True)
+            thread.start()
+            ready.wait(5)
+            if open_browser:
+                webbrowser.open(url)
+            console.print(
+                f"Waiting up to {timeout}s for the sign-in redirect on "
+                f"{settings.oauth_redirect_uri} ..."
+            )
+            thread.join()
+            if "error" in holder:
+                raise holder["error"]  # type: ignore[misc]
+            result = holder["result"]  # type: ignore[assignment]
+
+        manager = OAuthTokenManager(settings)
+        tokens = run_async(
+            manager.exchange_code(result.code, request.code_verifier, result.site_id)
+        )
+    except SEHError as exc:
+        _fail(str(exc))
+        return
+
+    console.print(f"\n[green]Signed in[/green] for site {tokens.site_id}.")
+    console.print(f"  Token file: {settings.token_path}")
+    console.print(
+        f"  Access token valid until: {tokens.expires_at.astimezone():%Y-%m-%d %H:%M %Z}"
+    )
+
+
+@auth.command("status", help="Show whether seh is signed in (uses no API credits).")
+@click.option(
+    "--refresh",
+    is_flag=True,
+    help="Also refresh the access token now, to prove the stored sign-in still works.",
+)
+@click.pass_context
+def auth_status(ctx: click.Context, refresh: bool) -> None:
+    """Show sign-in state without revealing tokens."""
+    from datetime import UTC
+
+    from seh.api.auth import OAuthTokenManager
+    from seh.utils.exceptions import SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    manager = OAuthTokenManager(settings)
+    try:
+        tokens = manager.store.load()
+        if tokens is None:
+            _fail(f"Not signed in (no token file at {settings.token_path}). Run 'seh auth login'.")
+            return
+        if refresh:
+            run_async(manager.handle_unauthorized(tokens.access_token.get_secret_value()))
+            tokens = manager.store.load() or tokens
+    except SEHError as exc:
+        _fail(str(exc))
+        return
+
+    now = datetime.now(UTC)
+    state = "valid" if tokens.expires_at > now else "expired (renewed automatically on next use)"
+    console.print("[green]Signed in[/green]")
+    console.print(f"  Site: {tokens.site_id}")
+    console.print(f"  Token file: {settings.token_path}")
+    console.print(f"  Last refreshed: {tokens.obtained_at.astimezone():%Y-%m-%d %H:%M %Z}")
+    console.print(
+        f"  Access token: {state}, expires {tokens.expires_at.astimezone():%Y-%m-%d %H:%M %Z}"
+    )
+    if refresh:
+        console.print("  [green]Refresh succeeded.[/green]")
+
+
+@auth.command("logout", help="Revoke the stored sign-in at SolarEdge and delete the token file.")
+@click.option("--yes", "-y", is_flag=True, help="Do not ask for confirmation.")
+@click.pass_context
+def auth_logout(ctx: click.Context, yes: bool) -> None:
+    """Revoke and delete stored tokens."""
+    from seh.api.auth import OAuthTokenManager
+    from seh.utils.exceptions import SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    if not yes:
+        click.confirm("Sign out? Syncs will fail until you run 'seh auth login' again", abort=True)
+    try:
+        revoked = run_async(OAuthTokenManager(settings).revoke())
+    except SEHError as exc:
+        _fail(str(exc))
+        return
+    if revoked:
+        console.print("[green]Signed out.[/green] SolarEdge revoked the token; local file deleted.")
+    else:
+        console.print(
+            "[yellow]Local token file deleted, but SolarEdge did not confirm revocation.[/yellow] "
+            "You can also remove access in your SolarEdge account."
+        )
 
 
 @cli.command(help=SYNC_HELP)
