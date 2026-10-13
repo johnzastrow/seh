@@ -14,15 +14,19 @@ from seh.db.engine import get_session
 
 
 @pytest.fixture
-def test_settings() -> Settings:
+def test_settings(tmp_path) -> Settings:
     """Create test settings with in-memory SQLite."""
     # Set environment variables for testing
-    os.environ["SEH_API_KEY"] = "test_api_key_12345"
+    os.environ["SEH_OAUTH_CLIENT_ID"] = "test_client_id"
+    os.environ["SEH_OAUTH_CLIENT_SECRET"] = "test_client_secret_12345"
     os.environ["SEH_DATABASE_URL"] = "sqlite:///:memory:"
     os.environ["SEH_LOG_LEVEL"] = "DEBUG"
 
     return Settings(
-        api_key="test_api_key_12345",
+        oauth_client_id="test_client_id",
+        oauth_client_secret="test_client_secret_12345",
+        site_ids="12345",
+        token_file=str(tmp_path / "tokens.json"),
         database_url="sqlite:///:memory:",
         log_level="DEBUG",
     )

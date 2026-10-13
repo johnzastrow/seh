@@ -25,7 +25,8 @@ class SolarEdgeClient:
         """
         self._settings = settings
         self._base_url = settings.api_base_url.rstrip("/")
-        self._api_key = settings.api_key.get_secret_value()
+        # Interim: V1 query-string key, replaced by OAuth bearer auth in the V2 client rewrite.
+        self._api_key = settings.api_key.get_secret_value() if settings.api_key else ""
         self._timeout = settings.api_timeout
         self._rate_limiter = RateLimiter(
             max_concurrent=settings.api_max_concurrent,

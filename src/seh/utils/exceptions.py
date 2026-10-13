@@ -27,6 +27,12 @@ class APIError(SEHError):
         self.status_code = status_code
 
 
+class AuthenticationError(SEHError):
+    """OAuth sign-in is missing, expired, or was rejected; the user must run 'seh auth login'."""
+
+    pass
+
+
 class RateLimitError(APIError):
     """API rate limit exceeded."""
 

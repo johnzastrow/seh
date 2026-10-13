@@ -21,7 +21,7 @@ class TestSolarEdgeClient:
 
     def test_client_initialization(self, client, test_settings):
         """Test client initializes correctly."""
-        assert client._api_key == test_settings.api_key.get_secret_value()
+        assert client._base_url == test_settings.api_base_url
         assert client._timeout == test_settings.api_timeout
         assert client._rate_limiter is not None
 
