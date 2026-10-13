@@ -35,8 +35,8 @@ reported (around 2026-10-09).
 | `seh_energy_readings` | 259 days | complete |
 
 Only legitimate short days remain: 2026-01-27 (system commissioned mid-afternoon) and 2026-03-08
-(DST, 92 intervals). `seh_power_details` still has 4 all-NULL V1 rows at 2026-03-08 02:00-02:45
-(a local hour that did not exist); safe to delete, owner has not decided.
+(DST, 92 intervals). The 4 all-NULL V1 rows at 2026-03-08 02:00-02:45 (a local hour that did
+not exist) were deleted on 2026-10-13 (ids 1881-1884).
 
 ### Next steps
 
