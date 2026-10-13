@@ -127,17 +127,20 @@ CONFIGURATION:
     SEH_NOTIFY_ON_SUCCESS  Send email on successful sync (default: false)
 
 SCHEDULING:
-  Use cron or systemd timers to run seh on a schedule:
+  Use cron or systemd timers to run seh on a schedule, as the user who ran
+  'seh auth login'. Each sync costs about 8-10 API credits (Free tier: 2000
+  per month), so run it at most a few times a day:
 
-    # Every hour
-    0 * * * * /path/to/seh sync >> /var/log/seh.log 2>&1
+    # Once a day
+    49 13 * * * cd /path/to/seh && uv run seh sync >> /var/log/seh.log 2>&1
 
-    # Every 15 minutes during daylight hours
-    */15 6-20 * * * /path/to/seh sync
+    # Every 6 hours
+    0 */6 * * * cd /path/to/seh && uv run seh sync
 
 MORE INFORMATION:
   API Documentation: https://api-docs.solaredge.com/
-  GitHub: https://github.com/your-repo/seh
+  GitHub: https://github.com/johnzastrow/seh
+  Upgrading from API V1: docs/MIGRATING_TO_API_V2.md
 """
 
 SYNC_HELP = """

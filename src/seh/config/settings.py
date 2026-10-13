@@ -110,7 +110,7 @@ class Settings(BaseSettings):
     )
     power_details_lookback_days: int = Field(
         default=25,
-        description="Days to look back for powerDetails (consumption/grid breakdown) on first sync",
+        description="Days to look back for the power breakdown (seh_power_details) on first sync",
     )
     sync_overlap_minutes: int = Field(
         default=15,

@@ -88,16 +88,20 @@ src/seh/
 │       ├── alert.py         # AlertSyncStrategy
 │       ├── environmental.py # EnvironmentalSyncStrategy
 │       ├── inventory.py     # InventorySyncStrategy
-│       └── telemetry.py     # TelemetrySyncStrategy
+│       ├── inverter_telemetry.py  # InverterTelemetrySyncStrategy
+│       └── optimizer_telemetry.py # No-op: no optimizer data in API V2
+│   (sync/v2_fields.py: V2 timestamp/field conversion helpers)
 └── utils/
-    ├── exceptions.py        # SEHError hierarchy
+    ├── exceptions.py        # SEHError hierarchy (incl. AuthenticationError)
+    ├── filelock.py          # Cross-process locks (token file, credit ledger)
     └── retry.py             # @retry_with_backoff decorator
 ```
 
 ### Data Flow
 
 1. **CLI** (`cli.py`) parses commands and loads settings
-2. **SolarEdgeClient** (`api/client.py`) makes async API requests with rate limiting
+2. **SolarEdgeClient** (`api/client.py`) makes async API V2 requests with an OAuth bearer token
+   from **OAuthTokenManager** (`api/auth.py`), rate limiting, and window splitting
 3. **SyncOrchestrator** (`sync/orchestrator.py`) coordinates sync across sites
 4. **SyncStrategies** (`sync/strategies/`) handle per-data-type logic
 5. **Repositories** (`db/repositories/`) perform upsert operations
@@ -109,7 +113,13 @@ src/seh/
 - **Strategy Pattern**: Each data type has its own sync strategy
 - **Repository Pattern**: Database operations abstracted behind repositories
 - **Upsert Pattern**: ON CONFLICT DO UPDATE for idempotent syncs
-- **Rate Limiting**: Semaphore for concurrency + rolling 24h quota tracking
+- **Rate Limiting**: Semaphore for concurrency, rolling 60 s limit (10/min), persistent monthly
+  credit ledger (`~/.config/seh/usage.json`, 2000/month) shared across processes
+- **OAuth tokens**: Rotating refresh tokens persisted atomically (0600) before use, under an
+  asyncio lock and a cross-process file lock
+- **V1 column preservation**: Strategies only upsert columns V2 provides; V1-only columns keep values
+- **Timestamps**: Naive site-local (V2 offset dropped); request ranges are UTC instants aligned to
+  interval starts
 - **Retry with Backoff**: Exponential backoff (2^n seconds, max 60s)
 
 ### Database Schema
@@ -228,7 +238,8 @@ SEH_NOTIFY_ON_SUCCESS=false
 - [x] Site filtering (--sites flag)
 - [x] Diagnostics (--diagnostics flag)
 - [x] Configurable error handling
-- [x] 81+ unit and integration tests
+- [x] SolarEdge API V2 with OAuth (`seh auth`), migration guide in docs/MIGRATING_TO_API_V2.md
+- [x] 230+ unit and integration tests
 
 ## What's NOT Implemented (TODO)
 
@@ -239,10 +250,13 @@ SEH_NOTIFY_ON_SUCCESS=false
 
 ## Reference Resources
 
-- [SolarEdge Monitoring API Documentation](https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf)
-- [solaredge-interface](https://github.com/ndejong/solaredge-interface) - Python reference
-- [solaredge-go](https://github.com/elliott-davis/solaredge-go) - Go reference
-- [solaredgeoptimizers](https://github.com/ProudElm/solaredgeoptimizers) - Optimizer data
+- [SolarEdge API V2 documentation](https://api-docs.solaredge.com/) and
+  [developer platform](https://developer.solaredge.com/)
+- docs/V2_MIGRATION_HANDOFF.md - verified V2 behaviour, limits, deployment state
+- docs/MIGRATING_TO_API_V2.md - user upgrade guide
+- [ha_int_solaredge](https://github.com/trooperthorn/ha_int_solaredge) - community V2 client (reference)
+- V1-era references (historical): [V1 API PDF](https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf),
+  [solaredge-interface](https://github.com/ndejong/solaredge-interface)
 
 ## Code Style
 

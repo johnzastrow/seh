@@ -11,14 +11,14 @@ Download your data from SolarEdge monitoring servers and store it in a relationa
 
 > **v0.3.0 uses the SolarEdge Monitoring API V2.** SolarEdge retired the V1 API (static
 > API keys) on 2026-11-01. V2 requires a free developer app and a one-time OAuth
-> sign-in; see [Upgrading from v0.2](#upgrading-from-v02-api-v1).
+> sign-in; see the [migration guide](docs/MIGRATING_TO_API_V2.md).
 
 **See the outputs on [this page](https://northredoubt.com/weather/) near the bottom where it says "Residential Solar"**
 
 ## Features
 
 - **Multi-database support**: SQLite (default), PostgreSQL, and MariaDB
-- **Comprehensive data sync**: Sites, equipment, energy, power, batteries, meters, alerts, inventory, and telemetry
+- **Comprehensive data sync**: Sites, equipment, energy, 15-minute power and power breakdown, power flow, batteries, meters, alerts, inventory (including optimizers), and inverter telemetry
 - **Incremental sync**: Only fetches new data since last sync with configurable overlap buffer
 - **SolarEdge API V2 with OAuth**: One-time browser sign-in (`seh auth login`), automatic token refresh
 - **Rate limiting**: Paces requests to 10/minute and tracks the 2,000-credit monthly budget
@@ -198,9 +198,29 @@ Create database tables and views. Safe to run multiple times.
 uv run seh init-db
 ```
 
+### `seh auth`
+
+Sign in to SolarEdge (OAuth, API V2). Needed once; seh renews the sign-in automatically.
+
+```bash
+# Browser sign-in (on a server: run `ssh -L 8765:127.0.0.1:8765 user@server` first)
+uv run seh auth login
+
+# Paste the redirect address instead of using the local listener
+uv run seh auth login --paste
+
+# Show sign-in state (no API credits); --refresh proves renewal works
+uv run seh auth status --refresh
+
+# Revoke at SolarEdge and delete the token file
+uv run seh auth logout
+```
+
 ### `seh check-api`
 
-Verify API connectivity and list available sites.
+Verify the sign-in, show the configured sites, and probe each V2 endpoint once (about 10 API
+credits; `--no-probe` uses 1). `--update-config` adds unavailable data types to
+`SEH_SKIP_DATA_TYPES`.
 
 ```bash
 uv run seh check-api
@@ -214,7 +234,7 @@ Synchronize data from SolarEdge to the database.
 # Incremental sync (recommended for cron)
 uv run seh sync
 
-# Full sync (fetch all historical data)
+# Full sync (re-fetch the configured lookback periods; about 30 credits with defaults)
 uv run seh sync --full
 
 # Sync specific sites only
@@ -226,13 +246,14 @@ uv run seh sync -v
 
 ### `seh status`
 
-Show sync status for all sites in the database.
+Show sync status for all sites in the database. `--diagnostics` adds configuration and the
+month's API credit usage.
 
 ```bash
 # Basic status
 uv run seh status
 
-# Full diagnostics (API health, DB status, rate limits)
+# Full diagnostics (DB, API settings, credits used this month)
 uv run seh status --diagnostics
 
 # Status for specific sites
@@ -300,24 +321,25 @@ uv run seh --version
 
 ### Database Tables
 
-All tables are prefixed with `seh_` to avoid naming conflicts:
+All tables are prefixed with `seh_` to avoid naming conflicts. Column-level detail, including which
+columns API V2 fills, is in [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md):
 
 | Table | Description |
 |-------|-------------|
-| `seh_sites` | Installation details (name, location, timezone, peak power, modules) |
-| `seh_equipment` | Inverters, optimizers, gateways with serial numbers and versions |
-| `seh_batteries` | Storage units with capacity, state of charge, and telemetry |
-| `seh_energy_readings` | Daily/monthly energy production in Wh |
-| `seh_power_readings` | 15-minute power measurements in W |
+| `seh_sites` | Installation details (name, location, timezone, peak power) |
+| `seh_equipment` | Inverters with model, firmware and optimizer count |
+| `seh_batteries` | Storage units with latest power and state of charge |
+| `seh_energy_readings` | Daily energy production in Wh |
+| `seh_power_readings` | 15-minute average power in W |
 | `seh_power_flows` | Real-time power flow snapshots (PV, grid, load, storage) — one record per sync |
-| `seh_power_details` | Historical 15-min time series: production, consumption, grid import/export in W |
+| `seh_power_details` | 15-minute production, consumption, self-consumption, feed-in and purchased power in W (from meter telemetry) |
 | `seh_meters` | Meter devices (production, consumption, etc.) |
-| `seh_meter_readings` | Meter time-series data with voltage, current, power factor |
-| `seh_alerts` | System alerts with severity, codes, and affected components |
-| `seh_environmental_benefits` | CO2/SO2/NOx savings, trees planted equivalent |
-| `seh_inventory` | Complete equipment inventory by category |
-| `seh_inverter_telemetry` | Detailed inverter data (voltage, current, temperature, mode) |
-| `seh_optimizer_telemetry` | Per-panel optimizer data (DC voltage, current, power, energy) |
+| `seh_meter_readings` | 15-minute power per meter (production, import, export) |
+| `seh_alerts` | System alerts with impact, type, and affected component |
+| `seh_environmental_benefits` | CO2 avoided (older equivalents kept from V1) |
+| `seh_inventory` | All devices: inverters, meters, batteries, optimizers |
+| `seh_inverter_telemetry` | 15-minute inverter AC power, voltage, current, frequency (V1 rows also have temperature and mode) |
+| `seh_optimizer_telemetry` | Per-panel optimizer data; not available in API V2 (stays empty) |
 | `seh_sync_metadata` | Tracks last sync time per site and data type |
 
 ### Database Views
@@ -341,10 +363,14 @@ See [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) for complete schema documentation
 
 1. **First run** (`--full`): Fetches historical data
    - Energy: 365 days lookback (configurable)
-   - Power/Storage/Meters: 7 days lookback (configurable)
+   - Power, meters, inverter telemetry: 7 days lookback (configurable)
+   - Power details: 25 days lookback (configurable; V2 has no maximum)
+   - Long ranges are split into SolarEdge's maximum windows (1 week for 15-minute data,
+     1 month for daily data); each request costs 1 API credit
 
 2. **Subsequent runs**: Incremental sync
-   - Starts from `last_data_timestamp - 15 minutes` (configurable overlap)
+   - Starts from the newest stored reading minus 15 minutes (configurable overlap), aligned to
+     the interval start, so the interval that was in progress last time is completed
    - Uses upsert (ON CONFLICT DO UPDATE) for idempotent operations
 
 3. **Data types synced** (in order):
@@ -352,32 +378,34 @@ See [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) for complete schema documentation
    - Equipment list
    - Energy readings
    - Power readings + current power flow
-   - Power details (historical 15-min breakdown: production, consumption, grid, solar)
+   - Power details (15-minute breakdown derived from meter telemetry)
    - Storage/battery data
    - Meter devices and readings
    - Environmental benefits
    - Alerts
    - Inventory
    - Inverter telemetry
-   - Optimizer telemetry
+   - Optimizer telemetry (not available in V2; recorded as `skipped`)
 
 ## Scheduled Sync
 
-Add to crontab for automatic updates:
+Add to crontab for automatic updates. Run it as the user who ran `seh auth login` (the token
+file is in that user's home directory).
 
 ```bash
 # Edit crontab
 crontab -e
 
-# Run every hour
-0 * * * * cd /path/to/seh && uv run seh sync >> /var/log/seh.log 2>&1
+# Once a day (~300 credits/month)
+49 13 * * * cd /path/to/seh && /home/user/.local/bin/uv run seh sync >> /var/log/seh.log 2>&1
 
-# Run every 6 hours
-0 */6 * * * cd /path/to/seh && uv run seh sync >> /var/log/seh.log 2>&1
-
-# Run every 15 minutes during daylight hours
-*/15 6-20 * * * cd /path/to/seh && uv run seh sync
+# Every 6 hours (~1,200 credits/month)
+0 */6 * * * cd /path/to/seh && /home/user/.local/bin/uv run seh sync >> /var/log/seh.log 2>&1
 ```
+
+Each incremental sync costs about 8-10 API credits, and the Free tier allows 2,000 per month.
+Hourly or more frequent schedules exceed the budget; seh stops before it is exceeded and
+resumes on the 1st (UTC).
 
 ## Architecture
 
@@ -388,9 +416,10 @@ src/seh/
 │   ├── settings.py          # Pydantic Settings from env vars
 │   └── logging.py           # Structlog + email notifications
 ├── api/
-│   ├── client.py            # Async httpx client for all API endpoints
-│   ├── rate_limiter.py      # Semaphore + daily quota tracking
-│   └── models/responses.py  # Pydantic models for API responses
+│   ├── client.py            # Async httpx client for the API V2 endpoints
+│   ├── auth.py              # OAuth token store and refresh (rotating tokens)
+│   ├── oauth_login.py       # Interactive sign-in for `seh auth login`
+│   └── rate_limiter.py      # Per-minute limit + monthly credit ledger
 ├── db/
 │   ├── base.py              # SQLAlchemy DeclarativeBase
 │   ├── engine.py            # Engine factory for SQLite/PG/MariaDB
@@ -399,9 +428,11 @@ src/seh/
 │   └── repositories/        # CRUD with upsert support
 ├── sync/
 │   ├── orchestrator.py      # Coordinates sync across sites
+│   ├── v2_fields.py         # V2 field and timestamp conversion helpers
 │   └── strategies/          # Per-data-type sync logic
 └── utils/
     ├── exceptions.py        # Custom exception hierarchy
+    ├── filelock.py          # Cross-process file locks (tokens, credit ledger)
     └── retry.py             # Exponential backoff decorator
 ```
 
@@ -444,7 +475,7 @@ SEH_DATABASE_URL="postgresql+psycopg://user:pass@localhost/seh" uv run pytest -m
 
 ## Testing
 
-The project includes 81+ unit and integration tests:
+The project includes 230+ unit and integration tests:
 
 ```bash
 # Run all tests
@@ -531,7 +562,14 @@ See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items
 - [ ] Alembic database migrations
 - [ ] Docker support
 
-### Recently Completed (v0.2.0)
+### Recently Completed (v0.3.0)
+
+- [x] SolarEdge Monitoring API V2 with OAuth sign-in (`seh auth`)
+- [x] Monthly credit budget and per-minute rate limiting
+- [x] Power details from meter telemetry; history backfill back to installation
+- [x] 230+ unit and integration tests
+
+### Completed in v0.2.0
 
 - [x] Comprehensive unit tests (81+ tests)
 - [x] Multi-database backend testing (SQLite, PostgreSQL, MariaDB)
@@ -548,13 +586,16 @@ See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items
 
 - [x] Database views for simplified querying (8 views)
 - [x] Inverter telemetry data sync
-- [x] Optimizer telemetry data sync
+- [x] Optimizer telemetry data sync (V1 only; not available in API V2)
 - [x] Environmental benefits data
 - [x] Alerts sync (with graceful handling for restricted API access)
 - [x] Inventory sync
 - [x] Data export functionality (CSV, JSON)
 
 ## Upgrading from v0.2 (API V1)
+
+The full step-by-step guide, including headless servers, backfilling history, the credit budget,
+and troubleshooting, is in **[docs/MIGRATING_TO_API_V2.md](docs/MIGRATING_TO_API_V2.md)**. Summary:
 
 1. Create an app at [developer.solaredge.com](https://developer.solaredge.com/) (Free tier,
    Site Access, redirect URI `http://127.0.0.1:8765/callback`).
