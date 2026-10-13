@@ -668,6 +668,7 @@ MIT
 ## Resources
 
 - [SolarEdge API V2 Documentation](https://api-docs.solaredge.com/)
+- [Reading live data from the inverter (local Modbus TCP, proposal)](docs/LOCAL_MODBUS_DATA.md)
 - [SolarEdge Developer Platform](https://developer.solaredge.com/)
 - [SolarEdge Monitoring Portal](https://monitoring.solaredge.com/)
 
