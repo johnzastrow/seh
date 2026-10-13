@@ -313,18 +313,15 @@ def load_settings(config_path: str | None = None):
     Returns:
         Validated Settings object.
     """
-    if config_path:
-        os.environ["SEH_ENV_FILE"] = config_path
-
-    # Clear cached settings to pick up new env file
+    # Clear cached settings so a changed environment or file is picked up
     from seh.config.settings import get_settings
+
     get_settings.cache_clear()
 
     try:
         from seh.config.logging import configure_logging
-        from seh.config.settings import get_settings
 
-        settings = get_settings()
+        settings = get_settings(config_path)
         configure_logging(settings)
         return settings
     except Exception as e:
@@ -360,7 +357,7 @@ def parse_site_ids(sites_str: str | None) -> list[int] | None:
     "--config",
     "-c",
     type=click.Path(exists=True),
-    help="Path to .env configuration file.",
+    help="Path to a .env configuration file (default: .env in the current directory). Environment variables still take precedence.",
 )
 @click.option(
     "--verbose",
@@ -664,6 +661,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
                 # Check current skip list
                 current_skip = settings.get_skip_data_types_list() or []
+                env_path = ctx.obj.get("config_path") or ".env"
                 new_skips = [t for t in failed_types if t not in current_skip]
 
                 if new_skips:
@@ -672,19 +670,19 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
                     if update_config:
                         # Auto-update without prompting
-                        update_env_file("SEH_SKIP_DATA_TYPES", skip_value)
-                        console.print(f"\n[green]Updated .env with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
+                        update_env_file("SEH_SKIP_DATA_TYPES", skip_value, env_path)
+                        console.print(f"\n[green]Updated {env_path} with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
                     else:
                         # Prompt user
                         console.print("\nWould you like to exclude these from future syncs?")
                         console.print(f"This will set: SEH_SKIP_DATA_TYPES={skip_value}")
-                        response = click.prompt("Update .env?", type=click.Choice(["y", "n"], case_sensitive=False), default="y")
+                        response = click.prompt(f"Update {env_path}?", type=click.Choice(["y", "n"], case_sensitive=False), default="y")
 
                         if response.lower() == "y":
-                            update_env_file("SEH_SKIP_DATA_TYPES", skip_value)
-                            console.print(f"\n[green]Updated .env with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
+                            update_env_file("SEH_SKIP_DATA_TYPES", skip_value, env_path)
+                            console.print(f"\n[green]Updated {env_path} with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
                         else:
-                            console.print("\n[yellow]Skipped .env update[/yellow]")
+                            console.print(f"\n[yellow]Skipped {env_path} update[/yellow]")
 
                     console.print("\n[dim]Tip: Run 'seh check-api' again after SolarEdge plan changes to reassess.[/dim]")
                 else:

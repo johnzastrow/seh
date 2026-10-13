@@ -96,7 +96,7 @@ class Settings(BaseSettings):
     # Site Filtering
     site_ids: str | None = Field(
         default=None,
-        description="Comma-separated list of site IDs to sync (syncs all if not set)",
+        description="Comma-separated site IDs to sync (required: API V2 cannot list sites)",
     )
 
     # Sync Configuration
@@ -309,10 +309,19 @@ class Settings(BaseSettings):
         return valid_types if valid_types else None
 
 
+DEFAULT_ENV_FILE = ".env"
+
+
 @lru_cache
-def get_settings() -> Settings:
-    """Get cached application settings."""
-    return Settings()
+def get_settings(env_file: str | None = None) -> Settings:
+    """Get cached application settings.
+
+    Args:
+        env_file: .env file to read (default: ".env" in the current directory).
+            Environment variables still take precedence over values in the file.
+    """
+    # _env_file is a pydantic-settings init option that mypy cannot see without the plugin.
+    return Settings(_env_file=env_file or DEFAULT_ENV_FILE)  # type: ignore[call-arg]
 
 
 def update_env_file(key: str, value: str, env_path: str = ".env") -> bool:

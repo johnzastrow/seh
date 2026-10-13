@@ -400,11 +400,20 @@ use inverter temperature or mode, optimizer telemetry, or environmental equivale
 get no new values after the switch.
 
 **I have several sites.**
-List them all in `SEH_SITE_IDS`. Each sign-in approves one site and seh keeps one token file, so a
-single seh installation is currently limited to the site you approved. For more sites, use a
-separate seh directory per site, each with its own `.env`, `SEH_TOKEN_FILE`, and `SEH_USAGE_FILE`,
-and sign in once in each. Multi-site use with Site Access has not been tested. (The `seh -c <file>`
-option does not currently select a different `.env`; use separate directories.)
+Each sign-in approves one site and seh keeps one token file, so one configuration covers the site
+you approved. For more sites, give each site its own config file with its own `SEH_SITE_IDS`,
+`SEH_TOKEN_FILE`, and `SEH_USAGE_FILE`, then sign in and sync once per file:
+
+```bash
+uv run seh -c site-a.env auth login
+uv run seh -c site-a.env sync
+uv run seh -c site-b.env auth login
+uv run seh -c site-b.env sync
+```
+
+`-c` replaces the default `./.env`; environment variables still override values in the file, and
+relative paths (such as `sqlite:///./seh.db`) are relative to the current directory. Multi-site use
+with Site Access has not been tested. (In seh 0.2.x and the first 0.3.0 builds, `-c` was ignored.)
 
 **Where are my credentials stored?**
 The client ID and secret are in `.env` (keep it at `chmod 600`). The tokens are in `SEH_TOKEN_FILE`,
