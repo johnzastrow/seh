@@ -1,43 +1,64 @@
 """Power details sync strategy.
 
-Fetches the SolarEdge powerDetails endpoint which provides a 15-minute
-historical time series of five power meter types:
-  - Production     : PV output (W)
-  - Consumption    : Total home load (W)
-  - SelfConsumption: Solar power used on-site (W)
-  - FeedIn         : Power exported to grid (W)
-  - Purchased      : Power imported from grid (W)
+Builds the 15-minute power breakdown in seh_power_details from V2 meter telemetry
+(GET /sites/{id}/meters/telemetry, QUARTER_HOUR). V2 has no powerDetails endpoint; the
+meters report production, grid import, and grid export, and the other two V1 series are
+derived from them:
 
-All values are stored in Watts in seh_power_details.  The chart layer
-converts to kW as needed.
+  - production_w       = productionPower
+  - purchased_w        = importPower                (from grid)
+  - feed_in_w          = exportPower                (to grid)
+  - consumption_w      = production + import - export
+  - self_consumption_w = production - export
+
+All values are 15-minute averages in watts, as in V1.
 """
 
 from datetime import datetime, timedelta
+from typing import Any
 
 import structlog
 
 from seh.db.repositories.power import PowerDetailsRepository
 from seh.sync.strategies.base import BaseSyncStrategy
+from seh.sync.v2_fields import site_local
 
 logger = structlog.get_logger(__name__)
 
-# Map API meter type strings to table column names
-METER_TYPE_TO_COL = {
-    "Production": "production_w",
-    "Consumption": "consumption_w",
-    "SelfConsumption": "self_consumption_w",
-    "FeedIn": "feed_in_w",
-    "Purchased": "purchased_w",
-}
+METRICS = {"productionPower": "production", "importPower": "import", "exportPower": "export"}
+
+
+def derive_row(values: dict[str, float]) -> dict[str, float | None]:
+    """Turn measured production/import/export into the five V1 power-details columns.
+
+    A derived value is only computed when all of its inputs were measured, so a gap in
+    one meter series yields NULL rather than a misleading number.
+    """
+    production = values.get("production")
+    imported = values.get("import")
+    exported = values.get("export")
+    consumption = None
+    if production is not None and imported is not None and exported is not None:
+        consumption = production + imported - exported
+    self_consumption = None
+    if production is not None and exported is not None:
+        self_consumption = production - exported
+    return {
+        "production_w": production,
+        "purchased_w": imported,
+        "feed_in_w": exported,
+        "consumption_w": consumption,
+        "self_consumption_w": self_consumption,
+    }
 
 
 class PowerDetailsSyncStrategy(BaseSyncStrategy):
-    """Sync strategy for detailed power breakdown data."""
+    """Sync strategy for the 15-minute power breakdown."""
 
     data_type = "power_details"
 
     async def sync(self, site_id: int, full: bool = False) -> int:
-        """Sync detailed power breakdown from the powerDetails API.
+        """Sync the power breakdown from meter telemetry.
 
         Args:
             site_id: Site ID.
@@ -50,93 +71,46 @@ class PowerDetailsSyncStrategy(BaseSyncStrategy):
 
         try:
             end_time = datetime.now()
-
+            lookback = self.settings.power_details_lookback_days
             if full:
-                start_time = end_time - timedelta(days=self.settings.power_details_lookback_days)
+                start_time = end_time - timedelta(days=lookback)
             else:
-                start_time = self.get_start_time(site_id, self.settings.power_details_lookback_days)
+                start_time = self.get_start_time(site_id, lookback)
 
-            # powerDetails API is limited to 1 month per request
-            total_count = 0
-            current_start = start_time
-            latest_timestamp: datetime | None = None
+            meters = await self.client.get_meters_telemetry(
+                site_id, start_time, end_time, resolution="QUARTER_HOUR"
+            )
 
-            while current_start < end_time:
-                chunk_end = min(current_start + timedelta(days=25), end_time)
-                chunk_count, chunk_latest = await self._sync_chunk(
-                    site_id, current_start, chunk_end
-                )
-                total_count += chunk_count
-                if chunk_latest and (latest_timestamp is None or chunk_latest > latest_timestamp):
-                    latest_timestamp = chunk_latest
-                current_start = chunk_end
+            # Sum each metric across meters per interval (a site normally has one meter
+            # reporting each direction; summing also covers split installations).
+            measured: dict[datetime, dict[str, float]] = {}
+            for metrics in meters.values():
+                for metric, key in METRICS.items():
+                    series: dict[str, Any] = metrics.get(metric) or {}
+                    for point in series.get("values") or []:
+                        timestamp = site_local(point.get("timestamp"))
+                        value = point.get("value")
+                        if timestamp is None or value is None:
+                            continue
+                        row = measured.setdefault(timestamp, {})
+                        row[key] = row.get(key, 0.0) + float(value)
 
-            self.update_sync_metadata(site_id, latest_timestamp, total_count)
-            logger.info("Power details sync complete", site_id=site_id, count=total_count)
-            return total_count
+            readings = [
+                {"site_id": site_id, "timestamp": ts, **derive_row(values)}
+                for ts, values in sorted(measured.items())
+            ]
+            count = PowerDetailsRepository(self.session).upsert_batch(readings) if readings else 0
+            latest = max(measured) if measured else None
+
+            if not meters:
+                logger.info("No meter telemetry returned", site_id=site_id)
+            self.update_sync_metadata(site_id, latest, count)
+            logger.info("Power details sync complete", site_id=site_id, count=count)
+            return count
 
         except Exception as e:
+            if self.skip_if_unavailable(site_id, e):
+                return 0
             logger.error("Power details sync failed", site_id=site_id, error=str(e))
             self.update_sync_metadata(site_id, None, 0, "error", str(e)[:500])
             raise
-
-    async def _sync_chunk(
-        self,
-        site_id: int,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> tuple[int, datetime | None]:
-        """Fetch and store one chunk of powerDetails data (≤30 days).
-
-        Returns:
-            Tuple of (records_upserted, latest_timestamp).
-        """
-        power_details = await self.client.get_power_details(
-            site_id=site_id,
-            start_time=start_time,
-            end_time=end_time,
-        )
-
-        if not power_details:
-            return 0, None
-
-        meters = power_details.get("meters", [])
-        if not meters:
-            return 0, None
-
-        # Build a dict keyed by timestamp so all meter types land in the same row
-        rows: dict[datetime, dict] = {}
-
-        for meter in meters:
-            meter_type = meter.get("type", "")
-            col = METER_TYPE_TO_COL.get(meter_type)
-            if col is None:
-                logger.debug("Unknown meter type, skipping", meter_type=meter_type)
-                continue
-
-            for value in meter.get("values", []):
-                date_str = value.get("date")
-                if not date_str:
-                    continue
-
-                try:
-                    ts = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
-                except ValueError:
-                    try:
-                        ts = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                    except ValueError:
-                        logger.warning("Unparseable timestamp", raw=date_str)
-                        continue
-
-                if ts not in rows:
-                    rows[ts] = {"site_id": site_id, "timestamp": ts}
-
-                rows[ts][col] = value.get("value")
-
-        if not rows:
-            return 0, None
-
-        repo = PowerDetailsRepository(self.session)
-        count = repo.upsert_batch(list(rows.values()))
-        latest = max(rows.keys())
-        return count, latest

@@ -13,10 +13,15 @@ from sqlalchemy import select
 
 from seh.db.models import (
     Alert,
+    Battery,
     EnergyReading,
     EnvironmentalBenefits,
     Equipment,
     InventoryItem,
+    InverterTelemetry,
+    Meter,
+    MeterReading,
+    PowerDetails,
     PowerFlow,
     PowerReading,
     Site,
@@ -28,8 +33,13 @@ from seh.sync.strategies.energy import EnergySyncStrategy
 from seh.sync.strategies.environmental import EnvironmentalSyncStrategy
 from seh.sync.strategies.equipment import EquipmentSyncStrategy
 from seh.sync.strategies.inventory import InventorySyncStrategy
+from seh.sync.strategies.inverter_telemetry import InverterTelemetrySyncStrategy
+from seh.sync.strategies.meter import MeterSyncStrategy, meter_type_for
+from seh.sync.strategies.optimizer_telemetry import OptimizerTelemetrySyncStrategy
 from seh.sync.strategies.power import PowerSyncStrategy, _activity
+from seh.sync.strategies.power_details import PowerDetailsSyncStrategy, derive_row
 from seh.sync.strategies.site import SiteSyncStrategy
+from seh.sync.strategies.storage import StorageSyncStrategy
 from seh.sync.v2_fields import calendar_date, site_local, title_case, utc_to_site_local
 from seh.utils.exceptions import APIError, AuthenticationError
 
@@ -550,3 +560,196 @@ class TestBaseStrategy:
         meta = metadata(test_session, "power")
         assert meta.status == "error"
         assert meta.last_data_timestamp == datetime(2026, 10, 12, 12, 15)
+
+
+# --- power details, meters, inverter telemetry, storage, optimizers (story 6c) -----------
+
+
+def meter_metrics(**series: list[tuple[str, float | None]]) -> dict:
+    return {
+        metric: {"unit": "W", "values": [{"timestamp": t, "value": v} for t, v in points]}
+        for metric, points in series.items()
+    }
+
+
+class TestDeriveRow:
+    def test_derives_consumption_and_self_consumption(self):
+        row = derive_row({"production": 10024.0, "import": 0.0, "export": 3232.5})
+        assert row == {
+            "production_w": 10024.0,
+            "purchased_w": 0.0,
+            "feed_in_w": 3232.5,
+            "consumption_w": 6791.5,
+            "self_consumption_w": 6791.5,
+        }
+
+    def test_night_consumption_equals_import(self):
+        row = derive_row({"production": 0.0, "import": 3229.1, "export": 0.0})
+        assert row["consumption_w"] == 3229.1
+        assert row["self_consumption_w"] == 0.0
+
+    def test_missing_input_leaves_derived_values_null(self):
+        row = derive_row({"import": 500.0, "export": 0.0})
+        assert row["production_w"] is None
+        assert row["consumption_w"] is None
+        assert row["self_consumption_w"] is None
+        assert row["purchased_w"] == 500.0
+
+
+class TestPowerDetailsSync:
+    async def test_builds_rows_from_meter_telemetry(self, test_session, test_settings, site):
+        ts = "2026-10-12T13:45:00-04:00"
+        telemetry = {
+            "MTR-1": meter_metrics(
+                productionPower=[(ts, 10024.0)],
+                importPower=[(ts, 0.0)],
+                exportPower=[(ts, 3232.5)],
+                productionEnergy=[(ts, 2506.0)],
+            )
+        }
+        client = client_with(get_meters_telemetry=telemetry)
+
+        count = await PowerDetailsSyncStrategy(client, test_session, test_settings).sync(
+            SITE_ID, full=True
+        )
+
+        assert count == 1
+        row = test_session.scalars(select(PowerDetails)).one()
+        assert row.timestamp == datetime(2026, 10, 12, 13, 45)
+        assert (row.production_w, row.consumption_w, row.feed_in_w) == (10024.0, 6791.5, 3232.5)
+        assert client.get_meters_telemetry.await_args.kwargs == {"resolution": "QUARTER_HOUR"}
+        assert metadata(test_session, "power_details").last_data_timestamp == row.timestamp
+
+    async def test_sums_several_meters(self, test_session, test_settings, site):
+        ts = "2026-10-12T12:00:00-04:00"
+        telemetry = {
+            "A": meter_metrics(
+                productionPower=[(ts, 100.0)], importPower=[(ts, 10.0)], exportPower=[(ts, 0.0)]
+            ),
+            "B": meter_metrics(productionPower=[(ts, 50.0)]),
+        }
+        client = client_with(get_meters_telemetry=telemetry)
+        await PowerDetailsSyncStrategy(client, test_session, test_settings).sync(SITE_ID, full=True)
+        assert test_session.scalars(select(PowerDetails)).one().production_w == 150.0
+
+
+class TestInverterTelemetrySync:
+    async def test_maps_v2_metrics_to_columns(self, test_session, test_settings, site):
+        ts = "2026-10-12T12:15:00-04:00"
+        telemetry = {
+            "INV-1": meter_metrics(
+                power=[(ts, 9947.0)],
+                energy=[(ts, 2486.0)],
+                voltage=[(ts, 247.2)],
+                current=[(ts, 40.1)],
+                frequency=[(ts, 60.0)],
+                consumedAcPower=[(ts, 3.0)],
+            )
+        }
+        client = client_with(get_inverters_telemetry=telemetry)
+
+        count = await InverterTelemetrySyncStrategy(client, test_session, test_settings).sync(
+            SITE_ID, full=True
+        )
+
+        assert count == 1
+        row = test_session.scalars(select(InverterTelemetry)).one()
+        assert (row.serial_number, row.timestamp) == ("INV-1", datetime(2026, 10, 12, 12, 15))
+        assert (row.total_active_power, row.active_power) == (9947.0, 9947.0)
+        assert (row.ac_voltage, row.ac_current, row.ac_frequency) == (247.2, 40.1, 60.0)
+        assert row.total_energy is None  # V1 lifetime counter; V2 energy is per interval
+        assert row.temperature is None
+
+
+class TestMeterSync:
+    async def test_stores_meters_and_power_readings(self, test_session, test_settings, site):
+        ts = "2026-10-12T12:15:00-04:00"
+        client = client_with(
+            get_devices=V2_DEVICES,
+            get_meters_telemetry={
+                "MTR-1": meter_metrics(
+                    productionPower=[(ts, 9000.0)],
+                    importPower=[(ts, 0.0)],
+                    exportPower=[(ts, 4000.0), ("2026-10-12T12:30:00-04:00", None)],
+                )
+            },
+        )
+
+        count = await MeterSyncStrategy(client, test_session, test_settings).sync(
+            SITE_ID, full=True
+        )
+
+        assert count == 3
+        meters = {m.name: m for m in test_session.scalars(select(Meter))}
+        assert meters["Export Meter"].meter_type == "FeedIn"
+        assert meters["Export Meter"].serial_number == "MTR-1"
+        assert meters["Self Consumption"].meter_type == "SelfConsumption"
+        assert meters["Production Meter"].meter_type == "Production"
+        export_readings = test_session.scalars(
+            select(MeterReading).where(MeterReading.meter_id == meters["Export Meter"].id)
+        ).all()
+        assert [(r.timestamp, r.power) for r in export_readings] == [
+            (datetime(2026, 10, 12, 12, 15), 4000.0)
+        ]
+
+    @pytest.mark.parametrize(
+        ("name", "expected"),
+        [
+            ("Self Consumption", "SelfConsumption"),
+            ("Consumption Meter", "Consumption"),
+            ("Import Meter", "Purchased"),
+            ("Mystery", None),
+        ],
+    )
+    def test_meter_type_from_name(self, name, expected):
+        assert meter_type_for(name) == expected
+
+
+class TestStorageSync:
+    async def test_site_without_battery_makes_no_telemetry_call(
+        self, test_session, test_settings, site
+    ):
+        client = client_with(get_devices=V2_DEVICES)
+        assert await StorageSyncStrategy(client, test_session, test_settings).sync(SITE_ID) == 0
+        client.get_storage_telemetry.assert_not_called()
+
+    async def test_stores_battery_and_latest_state(self, test_session, test_settings, site):
+        battery = {
+            "type": "BATTERY",
+            "serialNumber": "BAT-1",
+            "name": "Battery 1",
+            "model": "Home Battery",
+            "nameplate": 9700.0,
+            "connectedTo": "INV-1",
+        }
+        client = client_with(
+            get_devices=[*V2_DEVICES, battery],
+            get_storage_telemetry={
+                "BAT-1": meter_metrics(
+                    chargePower=[
+                        ("2026-10-12T12:00:00-04:00", 500.0),
+                        ("2026-10-12T12:15:00-04:00", 0.0),
+                    ],
+                    dischargePower=[("2026-10-12T12:15:00-04:00", 1200.0)],
+                    stateOfEnergy=[("2026-10-12T12:15:00-04:00", 81.0)],
+                )
+            },
+        )
+
+        assert await StorageSyncStrategy(client, test_session, test_settings).sync(SITE_ID) == 1
+
+        row = test_session.scalars(select(Battery)).one()
+        assert row.nameplate_capacity == 9700.0
+        assert row.connected_inverter_sn == "INV-1"
+        assert row.last_power == -1200.0  # discharging
+        assert row.last_state_of_charge == 81.0
+        assert row.last_telemetry_time == datetime(2026, 10, 12, 12, 15)
+
+
+class TestOptimizerTelemetrySync:
+    async def test_is_skipped_without_api_calls(self, test_session, test_settings, site):
+        client = AsyncMock()
+        strategy = OptimizerTelemetrySyncStrategy(client, test_session, test_settings)
+        assert await strategy.sync(SITE_ID) == 0
+        assert client.mock_calls == []
+        assert metadata(test_session, "optimizer_telemetry").status == "skipped"

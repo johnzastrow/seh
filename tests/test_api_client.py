@@ -132,6 +132,20 @@ class TestTimeHelpers:
         if limit:
             assert all(end - begin <= limit for begin, end in windows)
 
+    @pytest.mark.parametrize(
+        ("resolution", "expected"),
+        [
+            ("QUARTER_HOUR", datetime(2026, 10, 5, 21, 0, tzinfo=EDT)),
+            ("HOUR", datetime(2026, 10, 5, 21, 0, tzinfo=EDT)),
+            ("DAY", datetime(2026, 10, 5, 0, 0, tzinfo=EDT)),
+            ("YEAR", datetime(2026, 10, 5, 21, 7, 33, tzinfo=EDT)),
+        ],
+    )
+    def test_split_windows_aligns_start_to_interval(self, resolution, expected):
+        """A mid-interval start would return a partial first interval."""
+        start = datetime(2026, 10, 5, 21, 7, 33, tzinfo=EDT)
+        assert split_windows(start, start + timedelta(hours=1), resolution)[0][0] == expected
+
     def test_split_windows_empty_range(self):
         start = datetime(2026, 1, 1, tzinfo=UTC)
         assert split_windows(start, start, "DAY") == []

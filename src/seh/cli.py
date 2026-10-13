@@ -436,11 +436,11 @@ def init_db(ctx: click.Context) -> None:
 @cli.command(help="""
 Check API connectivity and list available sites.
 
-Validates your API key and displays all sites accessible with your credentials.
+Verifies your SolarEdge sign-in and shows the sites configured in SEH_SITE_IDS.
 Use this command to verify configuration before running sync.
 
 By default, also probes all API endpoints to detect which ones are available
-for your account. Endpoints that return errors (400, 403, etc.) can be
+for your account (about 10 API credits). Endpoints that return errors (400, 403, etc.) can be
 automatically excluded from future syncs to prevent log pollution.
 
 EXAMPLES:
@@ -463,9 +463,9 @@ OUTPUT:
   - Option to exclude failing endpoints from future syncs
 
 TROUBLESHOOTING:
-  "API check failed: 401" - Invalid API key
-  "API check failed: 403" - API key lacks permissions for this site
-  "No sites found" - API key is valid but has no associated sites
+  "Not signed in" / "rejected"  - Run 'seh auth login'
+  "HTTP 403"                    - Your API plan or sign-in does not cover this data
+  "No sites configured"         - Set SEH_SITE_IDS
 """)
 @click.option(
     "--probe/--no-probe",
@@ -498,7 +498,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
             return client, sites
 
     async def _probe_endpoints(client: SolarEdgeClient, site_id: int) -> dict[str, dict]:
-        """Probe all API endpoints for a site.
+        """Probe each V2 endpoint once for a site (about 10 API credits).
 
         Returns:
             Dict mapping data_type to {status: str, code: int|None, notes: str}
@@ -507,93 +507,53 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
         results: dict[str, dict] = {}
         now = datetime.now()
-        yesterday = now - timedelta(days=1)
+        hour_ago = now - timedelta(hours=1)
 
-        # Probe site details
-        try:
-            await client.get_site_details(site_id)
-            results["site"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["site"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe equipment
-        equipment_list = []
-        try:
-            equipment_list = await client.get_equipment(site_id)
-            count = len(equipment_list)
-            results["equipment"] = {"status": "ok", "code": None, "notes": f"{count} inverter(s)" if count else "No equipment"}
-        except APIError as e:
-            results["equipment"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe energy
-        try:
-            await client.get_energy(site_id, yesterday.date(), now.date())
-            results["energy"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["energy"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe power
-        try:
-            await client.get_power(site_id, yesterday, now)
-            results["power"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["power"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe storage
-        try:
-            storage_data = await client.get_storage_data(site_id, yesterday, now)
-            batteries = storage_data.get("batteries", [])
-            results["storage"] = {"status": "ok", "code": None, "notes": f"{len(batteries)} battery(ies)" if batteries else "No batteries"}
-        except APIError as e:
-            results["storage"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe meters
-        try:
-            meters = await client.get_meters(site_id)
-            count = len(meters)
-            results["meter"] = {"status": "ok", "code": None, "notes": f"{count} meter(s)" if count else "No meters"}
-        except APIError as e:
-            results["meter"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe environmental benefits
-        try:
-            await client.get_environmental_benefits(site_id)
-            results["environmental"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["environmental"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe alerts
-        try:
-            alerts = await client.get_alerts(site_id)
-            count = len(alerts)
-            results["alert"] = {"status": "ok", "code": None, "notes": f"{count} alert(s)" if count else "No alerts"}
-        except APIError as e:
-            results["alert"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe inventory
-        try:
-            await client.get_inventory(site_id)
-            results["inventory"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["inventory"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe inverter telemetry (requires equipment)
-        if equipment_list:
+        async def attempt(data_type: str, call, describe=lambda _r: "") -> None:
             try:
-                serial = equipment_list[0].get("serialNumber")
-                if serial:
-                    await client.get_inverter_data(site_id, serial, yesterday, now)
-                    results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": ""}
-                else:
-                    results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": "No serial found"}
+                response = await call()
+                results[data_type] = {"status": "ok", "code": None, "notes": describe(response)}
             except APIError as e:
-                results["inverter_telemetry"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-        else:
-            results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": "No equipment to probe"}
+                results[data_type] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
 
-        # Optimizer telemetry - typically accessed via inverter data endpoint
-        # We'll mark it as requiring equipment similar to inverter telemetry
-        results["optimizer_telemetry"] = {"status": "ok", "code": None, "notes": "Requires optimizer serial"}
+        def count_of(kind: str, label: str, plural: str):
+            def describe(devices: list[dict]) -> str:
+                n = sum(1 for d in devices if d.get("type") == kind)
+                return f"{n} {label}(s)" if n else f"No {plural}"
+
+            return describe
+
+        await attempt("site", lambda: client.get_site(site_id))
+        await attempt("equipment", lambda: client.get_devices(site_id), count_of("INVERTER", "inverter", "inverters"))
+        await attempt(
+            "inventory",
+            lambda: client.get_devices(site_id),
+            lambda devices: f"{len(devices)} device(s)",
+        )
+        await attempt("energy", lambda: client.get_energy(site_id, now.date(), now))
+        await attempt(
+            "power",
+            lambda: client.get_power(site_id, hour_ago, now),
+        )
+        await attempt("power_details", lambda: client.get_meters_telemetry(site_id, hour_ago, now))
+        await attempt("meter", lambda: client.get_devices(site_id), count_of("METER", "meter", "meters"))
+        await attempt("storage", lambda: client.get_devices(site_id), count_of("BATTERY", "battery", "batteries"))
+        await attempt("environmental", lambda: client.get_environmental_benefits(site_id))
+        await attempt(
+            "alert",
+            lambda: client.get_alerts(site_id),
+            lambda alerts: f"{len(alerts)} alert(s)" if alerts else "No alerts",
+        )
+        await attempt(
+            "inverter_telemetry",
+            lambda: client.get_inverters_telemetry(site_id, hour_ago, now),
+            lambda inverters: f"{len(inverters)} inverter(s) reporting",
+        )
+        results["optimizer_telemetry"] = {
+            "status": "error",
+            "code": None,
+            "notes": "Not available in API V2",
+        }
 
         return results
 
@@ -601,7 +561,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
         _, sites = run_async(_check())
 
         if not sites:
-            console.print("[yellow]No sites found for this API key.[/yellow]")
+            console.print("[yellow]No sites configured (set SEH_SITE_IDS).[/yellow]")
             return
 
         # Display sites table
@@ -627,9 +587,9 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
                 last_str = "-"
 
             table.add_row(
-                str(site.get("id")),
+                str(site.get("siteId")),
                 site.get("name", "Unknown"),
-                site.get("status", "-"),
+                (site.get("activationStatus") or "-").title(),
                 peak_str,
                 last_str,
             )
@@ -640,7 +600,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
         # Endpoint probing
         if probe:
             first_site = sites[0]
-            site_id = first_site.get("id")
+            site_id = first_site.get("siteId")
             site_name = first_site.get("name", "Unknown")
 
             console.print(f"\n[bold]Probing API endpoints for site {site_id} ({site_name})...[/bold]")
@@ -659,9 +619,9 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
             failed_types: list[str] = []
             data_type_order = [
-                "site", "equipment", "energy", "power", "storage",
+                "site", "equipment", "energy", "power", "power_details", "storage",
                 "meter", "environmental", "alert", "inventory",
-                "inverter_telemetry", "optimizer_telemetry"
+                "inverter_telemetry", "optimizer_telemetry",
             ]
 
             for data_type in data_type_order:

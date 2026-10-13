@@ -67,8 +67,11 @@ def parse_timestamp(value: str) -> datetime:
 def split_windows(
     start: TimePoint, end: TimePoint, resolution: str
 ) -> list[tuple[datetime, datetime]]:
-    """Split [start, end) into consecutive windows no longer than the resolution allows."""
-    start_dt = _as_aware(start)
+    """Split [start, end) into consecutive windows no longer than the resolution allows.
+
+    The start is first aligned to the beginning of its interval.
+    """
+    start_dt = floor_to_resolution(_as_aware(start), resolution)
     end_dt = _as_aware(end)
     if end_dt <= start_dt:
         return []
@@ -82,6 +85,21 @@ def split_windows(
         windows.append((cursor, window_end))
         cursor = window_end
     return windows
+
+
+def floor_to_resolution(value: datetime, resolution: str) -> datetime:
+    """Align a start time to the beginning of its interval.
+
+    A range starting mid-interval makes SolarEdge return a partial average for that first
+    interval, which would overwrite a complete value already stored.
+    """
+    if resolution == "QUARTER_HOUR":
+        return value.replace(minute=value.minute - value.minute % 15, second=0, microsecond=0)
+    if resolution == "HOUR":
+        return value.replace(minute=0, second=0, microsecond=0)
+    if resolution == "DAY":
+        return value.replace(hour=0, minute=0, second=0, microsecond=0)
+    return value
 
 
 def _as_aware(value: TimePoint) -> datetime:

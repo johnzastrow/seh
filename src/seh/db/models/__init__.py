@@ -9,7 +9,7 @@ from seh.db.models.inventory import InventoryItem
 from seh.db.models.inverter_telemetry import InverterTelemetry
 from seh.db.models.meter import Meter, MeterReading
 from seh.db.models.optimizer_telemetry import OptimizerTelemetry
-from seh.db.models.power import PowerFlow, PowerReading
+from seh.db.models.power import PowerDetails, PowerFlow, PowerReading
 from seh.db.models.site import Site
 from seh.db.models.sync_metadata import SyncMetadata
 
@@ -24,6 +24,7 @@ __all__ = [
     "Meter",
     "MeterReading",
     "OptimizerTelemetry",
+    "PowerDetails",
     "PowerFlow",
     "PowerReading",
     "Site",
