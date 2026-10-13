@@ -1,14 +1,81 @@
 # Handoff: SolarEdge Monitoring API V1 -> V2 Migration
 
-**Status as of 2026-10-12:** Investigation complete. OAuth sign-in and all endpoints below
-verified against a live homeowner site with `scripts/probe_v2.py` (see sections 2 and 3).
-**Implemented in v0.3.0** (stories 1-7 of section 5); validated against the production V1
-database (energy, power, and power details match). Remaining: deployment to lamp.lan.
+**Status as of 2026-10-12 21:45 EDT: DEPLOYED.** seh 0.3.0 (API V2) is running in production on
+lamp.lan from branch `feat/v2-migration` (not yet merged to `main`). First production sync and a
+history backfill succeeded. See section 0 for the current state and what is left.
 **Hard deadline:** V1 is retired **2026-11-01** (per SolarEdge's own V1 error body:
 "The V1 Monitoring API is retired on 2026-11-01. This is a scheduled window, not an outage.").
 Some community sources say 2026-11-03; plan for the earlier date. SolarEdge support has
 stated the shutdown will not be extended. Scheduled V1 outage windows have already been
 reported (around 2026-10-09).
+
+---
+
+## 0. Current state and next steps (read this first)
+
+### What is done
+
+| Item | State |
+|---|---|
+| Code | Branch `feat/v2-migration` (pushed; head `cfd1de9`), commits for stories 1-7 plus a `uv.lock` refresh. 233 tests pass (Windows), 236 (Linux). Builds on PR #15 (`b70e269`). |
+| Production | lamp.lan `/home/jcz/seh/seh` checked out at `feat/v2-migration`, `uv sync --extra mariadb`, seh 0.3.0. Cron unchanged: `49 13 * * * cd /home/jcz/seh/seh && /home/jcz/.local/bin/uv run seh sync`. |
+| Lamp `.env` | `SEH_OAUTH_CLIENT_ID/SECRET` added by the owner, `SEH_SITE_IDS=4813725`, old `SEH_API_KEY` commented out, `chmod 600`. Skip list unchanged: `alert,meter`. |
+| Sign-in | OAuth token moved from the Windows dev machine to lamp `~/.config/seh/tokens.json` (0600); Windows copy deleted. `seh auth status --refresh` on lamp succeeded. |
+| Credits | Lamp ledger `~/.config/seh/usage.json`: 193 of 2000 for 2026-10 (seeded at 90 for dev/probe usage). Daily incremental sync costs ~8. |
+| First V2 sync (21:23) | Success, 125 records, no errors; continuous with V1 data. |
+| Backfill (21:30) | `seh sync --full` with 260-day power/power-details and 365-day energy lookback (inverter telemetry excluded): 49,888 records, 9.6 min. Plus a one-off fill of inverter telemetry 2026-03-05..11 (348 rows). |
+
+### Data state after backfill (lamp, MariaDB `weather`)
+
+| Table | Rows | Coverage |
+|---|---|---|
+| `seh_power_details` | 24,800 | 2026-01-27 .. now, every day complete (was from 2026-02-16) |
+| `seh_power_readings` | 24,795 | complete; all values re-fetched from V2 (fixes V1 partial intervals) |
+| `seh_inverter_telemetry` | 42,168 | V1 5-minute rows plus V2 15-minute rows from 21:23 on 2026-10-12 and for 2026-03-05..11 |
+| `seh_energy_readings` | 259 days | complete |
+
+Only legitimate short days remain: 2026-01-27 (system commissioned mid-afternoon) and 2026-03-08
+(DST, 92 intervals). `seh_power_details` still has 4 all-NULL V1 rows at 2026-03-08 02:00-02:45
+(a local hour that did not exist); safe to delete, owner has not decided.
+
+### Next steps
+
+1. **Check the first cron run** (2026-10-13 13:49 EDT) on lamp: `tail logs/seh.log`, `uv run seh status`,
+   and `uv run seh status --diagnostics` (credits). Expect ~8 credits and status `success`.
+2. **Open a PR** `feat/v2-migration` -> `main` after a clean day; then close PR #15 (its commit is
+   included). After merging, switch lamp back to `main`:
+   `git fetch https://github.com/johnzastrow/seh.git main && git checkout -B main FETCH_HEAD`
+   (lamp cannot fetch over SSH; use HTTPS).
+3. **`.env.example`** still documents `SEH_API_KEY`. The agent is denied access to `.env*` files, so the
+   owner must update it (OAuth lines are in the README "Upgrading from v0.2" section).
+4. Follow-ups (not urgent):
+   - `seh export dump` passes the MariaDB password on the `mysqldump` command line (visible in the
+     process list); use `MYSQL_PWD` / `PGPASSWORD` in the environment instead.
+   - DST fall-back (2026-11-01): timestamps are naive local time, so 01:00-01:45 occurs twice and the
+     second hour overwrites the first (same as V1). Fixing needs a schema change (UTC or offset column).
+   - V2 alert and storage (battery) schemas are unverified (no alerts, no battery on this site);
+     field names come from a community client. Check `seh_alerts` if an alert ever appears.
+   - Delete `scripts/probe_v2.py` once nothing more needs probing (it is throwaway by design).
+   - Pre-existing mypy errors in `src/seh/sync/orchestrator.py` (dict type args) and a SIM108 lint
+     in `config/settings.py:update_env_file` were left untouched.
+
+### Rollback (short-term only; V1 stops working 2026-11-01)
+
+On lamp: `git checkout pre-v2-deploy && uv sync --extra mariadb`, then restore
+`~/seh-backups/env.pre-v2.20261012-211812` to `.env`. A dump of all `seh_*` tables taken before the
+deploy is `~/seh-backups/seh-tables.pre-v2.20261012-211812.sql` (owner-only).
+
+### Gotchas for whoever continues
+
+- **Do not sign in or sync from another machine with the same grant.** Refresh tokens rotate; using the
+  token anywhere else invalidates lamp's copy. Dev testing needs its own `seh auth login` (and that
+  would then break lamp's token unless a separate SolarEdge app is used).
+- Credits are per SolarEdge app, but each machine keeps its own ledger; only lamp should sync.
+- On Windows the repo `.venv` is a stale Linux venv. Use
+  `UV_PROJECT_ENVIRONMENT=<scratch dir> uv run --frozen ...` or delete `.venv` and `uv sync --extra dev`.
+- Windows has no IANA tz database (no `tzdata` package), so site-timezone conversion falls back to the
+  machine's zone there; one test is skipped on Windows and runs on Linux.
+- The verified V2 limits, endpoint behaviour, and response shapes are in sections 2 and 3.
 
 ---
 
@@ -85,6 +152,8 @@ Response format notes:
 
 ## 5. Implementation plan
 
+**All steps below are done (2026-10-12); step 8 is the deployment described in section 0.**
+
 1. **Probe first.** (Done 2026-10-12.) Write `scripts/probe_v2.py` that authenticates and calls every V2 endpoint
    above for one real site, saving raw JSON to a gitignored folder. Use the output to confirm
    paths, parameters, timestamp format, and response shapes before rewriting anything.
@@ -111,14 +180,13 @@ Response format notes:
    `tests/conftest.py`, `tests/test_config.py`; add tests for token refresh/rotation and credit budget.
 9. **Release**: bump version (breaking config change), sync `__init__.py`, update docs.
 
-## 6. Open decisions (need the owner)
+## 6. Decisions (all resolved)
 
-1. ~~Which access type is available?~~ Resolved: OAuth Site Access (redirect
-   `http://127.0.0.1:8765/callback`). Fleet support can be dropped from the plan.
-2. Token storage: OS keyring (`keyring` package, new dependency) vs owner-only file (0600)?
-3. Is losing optimizer telemetry (and inverter temperature/mode/per-phase) acceptable, or is a paid tier / local Modbus
-   (inverter SunSpec over TCP) source worth scoping as a separate feature?
-4. Keep a V1 code path until 2026-11-01, or cut over directly?
+1. Access type: OAuth Site Access (redirect `http://127.0.0.1:8765/callback`); Fleet support dropped.
+2. Token storage: owner-only file (0600) at `~/.config/seh/tokens.json` (headless server, no keyring).
+3. Lost data (optimizer telemetry; inverter temperature/mode/DC voltage/power limit/reactive power;
+   5-minute inverter resolution) accepted; a local Modbus source was not pursued.
+4. Cut over directly; no V1 code path.
 
 ## 7. Security notes
 
