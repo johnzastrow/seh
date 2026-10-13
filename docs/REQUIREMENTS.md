@@ -1,5 +1,9 @@
 # Requirements & Implementation Status
 
+> **Historical document.** These requirements describe the original SolarEdge Monitoring
+> API V1 implementation (API key, `/site/{id}/...` endpoints, 300 requests/day). Since v0.3.0
+> seh uses API V2; see `docs/V2_MIGRATION_HANDOFF.md` and the README.
+
 ## Overview
 
 SolarEdge Harvest (seh) is a Python application to download data from the SolarEdge Monitoring API and store it in a relational database for analysis and reporting.

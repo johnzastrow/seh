@@ -77,9 +77,11 @@ class PowerFlow(Base, TimestampMixin):
 
 
 class PowerDetails(Base, TimestampMixin):
-    """Detailed power breakdown at 15-minute intervals from the powerDetails API.
+    """Detailed power breakdown at 15-minute intervals.
 
-    All power values are in Watts (W), as returned by the SolarEdge API.
+    All power values are in Watts (W). Since API V2 (seh 0.3.0) production, purchased and
+    feed-in come from meter telemetry and consumption/self-consumption are derived from them
+    (see sync/strategies/power_details.py); V1 used the powerDetails endpoint.
     Unlike PowerFlow (real-time snapshot), this is a historical time series.
     """
 
@@ -93,7 +95,7 @@ class PowerDetails(Base, TimestampMixin):
         DateTime(timezone=True), nullable=False, index=True
     )
 
-    # Direct meter values from SolarEdge powerDetails endpoint (all in Watts)
+    # Power per 15-minute interval, in Watts
     production_w: Mapped[float | None] = mapped_column(Float, nullable=True)       # PV output
     consumption_w: Mapped[float | None] = mapped_column(Float, nullable=True)      # Home load
     self_consumption_w: Mapped[float | None] = mapped_column(Float, nullable=True) # Solar used on-site

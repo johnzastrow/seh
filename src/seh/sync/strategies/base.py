@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from seh.api.client import SolarEdgeClient
 from seh.config.settings import Settings
 from seh.db.repositories.sync_metadata import SyncMetadataRepository
+from seh.utils.exceptions import APIError
 
 logger = structlog.get_logger(__name__)
 
@@ -85,6 +86,12 @@ class BaseSyncStrategy(ABC):
             status: Sync status.
             error_message: Error message if failed.
         """
+        if last_data_timestamp is None:
+            # Never erase the high-water mark: after an error or an empty fetch the next
+            # incremental sync must resume where data ends, not re-fetch the full lookback
+            # (which would spend API credits on data already stored).
+            last_data_timestamp = self.get_last_sync(site_id)
+
         self.sync_metadata_repo.upsert(
             site_id=site_id,
             data_type=self.data_type,
@@ -94,6 +101,23 @@ class BaseSyncStrategy(ABC):
             status=status,
             error_message=error_message,
         )
+
+    def skip_if_unavailable(self, site_id: int, error: Exception) -> bool:
+        """Record a skip for endpoints this site or API plan does not offer.
+
+        SolarEdge answers 403 for endpoints outside the account's API tier and 400/404 for
+        data a site does not have. Returns True if the error was handled as a skip.
+        """
+        if isinstance(error, APIError) and error.status_code in (400, 403, 404):
+            logger.info(
+                "Data type not available for site",
+                site_id=site_id,
+                data_type=self.data_type,
+                status_code=error.status_code,
+            )
+            self.update_sync_metadata(site_id, None, 0, "skipped", str(error)[:500])
+            return True
+        return False
 
     @abstractmethod
     async def sync(self, site_id: int, full: bool = False) -> int:

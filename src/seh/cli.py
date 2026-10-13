@@ -4,9 +4,10 @@ SolarEdge Harvest (seh) downloads data from SolarEdge solar monitoring servers
 and stores it in a relational database (SQLite, PostgreSQL, or MariaDB).
 
 Environment Variables:
-    SEH_API_KEY          SolarEdge monitoring API key (required)
+    SEH_OAUTH_CLIENT_ID      OAuth client ID of your developer.solaredge.com app (required)
+    SEH_OAUTH_CLIENT_SECRET  OAuth client secret of that app (required)
+    SEH_SITE_IDS             Comma-separated site IDs to sync (required)
     SEH_DATABASE_URL     Database connection URL (default: sqlite:///./seh.db)
-    SEH_SITE_IDS         Comma-separated list of site IDs to sync (optional)
     SEH_LOG_LEVEL        Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
     SEH_LOG_FILE         Log file path (optional, logs to console if not set)
 
@@ -17,12 +18,13 @@ import asyncio
 import csv
 import json
 import os
-import subprocess
 from datetime import date, datetime
 
 import click
 from rich.console import Console
 from rich.table import Table
+
+from seh import __version__
 
 console = Console()
 
@@ -39,16 +41,22 @@ energy production, power readings, equipment data, and more into a local or
 remote database for analysis and reporting.
 
 QUICK START:
-  1. Create a .env file with your API key:
-     SEH_API_KEY=your_api_key_here
+  1. Create an app with Site Access at https://developer.solaredge.com/
+     (redirect URI http://127.0.0.1:8765/callback), then add to .env:
+     SEH_OAUTH_CLIENT_ID=...
+     SEH_OAUTH_CLIENT_SECRET=...
+     SEH_SITE_IDS=1234567
 
-  2. Initialize the database:
+  2. Sign in once (see 'seh auth --help' for headless servers):
+     seh auth login
+
+  3. Initialize the database:
      seh init-db
 
-  3. Check API connectivity:
+  4. Check API connectivity:
      seh check-api
 
-  4. Sync data from SolarEdge:
+  5. Sync data from SolarEdge:
      seh sync
 
 EXAMPLES:
@@ -78,7 +86,15 @@ CONFIGURATION:
   You can use a .env file or set them directly in your environment.
 
   Required:
-    SEH_API_KEY            Your SolarEdge API key
+    SEH_OAUTH_CLIENT_ID     OAuth client ID (developer.solaredge.com app)
+    SEH_OAUTH_CLIENT_SECRET OAuth client secret
+    SEH_SITE_IDS            Comma-separated site IDs (V2 cannot list sites)
+
+  Sign-in and API budget:
+    SEH_TOKEN_FILE          OAuth token file (default: ~/.config/seh/tokens.json)
+    SEH_USAGE_FILE          API credit ledger (default: ~/.config/seh/usage.json)
+    SEH_API_MONTHLY_CREDITS Monthly credit budget (default: 2000, Free tier)
+    SEH_API_PER_MINUTE_LIMIT  Calls per minute (default: 10, Free tier)
 
   Database:
     SEH_DATABASE_URL       Connection URL (default: sqlite:///./seh.db)
@@ -87,13 +103,12 @@ CONFIGURATION:
                            - mariadb+mariadbconnector://user:pass@host:3306/db
 
   Sync options:
-    SEH_SITE_IDS           Comma-separated site IDs to sync (syncs all if not set)
     SEH_SKIP_DATA_TYPES    Comma-separated data types to skip (e.g., meter,alert)
                            Run 'seh check-api' to auto-detect unavailable endpoints
     SEH_ENERGY_LOOKBACK_DAYS   Days of energy data for first sync (default: 365)
     SEH_POWER_LOOKBACK_DAYS    Days of power data for first sync (default: 7)
-    SEH_POWER_TIME_UNIT        Power data granularity (default: QUARTER_OF_AN_HOUR)
-                               Options: QUARTER_OF_AN_HOUR, HOUR, DAY, WEEK, MONTH, YEAR
+    SEH_POWER_TIME_UNIT        Power data resolution (default: QUARTER_HOUR)
+                               Options: QUARTER_HOUR, HOUR, DAY, WEEK, MONTH, YEAR
 
   Error handling:
     SEH_ERROR_HANDLING     Mode: strict, lenient, skip (default: lenient)
@@ -111,17 +126,20 @@ CONFIGURATION:
     SEH_NOTIFY_ON_SUCCESS  Send email on successful sync (default: false)
 
 SCHEDULING:
-  Use cron or systemd timers to run seh on a schedule:
+  Use cron or systemd timers to run seh on a schedule, as the user who ran
+  'seh auth login'. Each sync costs about 8-10 API credits (Free tier: 2000
+  per month), so run it at most a few times a day:
 
-    # Every hour
-    0 * * * * /path/to/seh sync >> /var/log/seh.log 2>&1
+    # Once a day
+    49 13 * * * cd /path/to/seh && uv run seh sync >> /var/log/seh.log 2>&1
 
-    # Every 15 minutes during daylight hours
-    */15 6-20 * * * /path/to/seh sync
+    # Every 6 hours
+    0 */6 * * * cd /path/to/seh && uv run seh sync
 
 MORE INFORMATION:
-  API Documentation: https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf
-  GitHub: https://github.com/your-repo/seh
+  API Documentation: https://api-docs.solaredge.com/
+  GitHub: https://github.com/johnzastrow/seh
+  Upgrading from API V1: docs/MIGRATING_TO_API_V2.md
 """
 
 SYNC_HELP = """
@@ -165,16 +183,15 @@ DATA TYPES SYNCED:
   - Storage: Battery status and telemetry
   - Meters: Revenue-grade meter data
   - Alerts: System alerts and notifications
-  - Environmental: CO2 savings, trees planted equivalents
+  - Environmental: CO2 avoided
 
-API RATE LIMITS:
-  SolarEdge enforces these limits:
-  - 3 concurrent API requests maximum
-  - 300 requests per account per day
-  - 10 second timeout per request
+API LIMITS (SolarEdge API V2, Free tier):
+  - 2000 credits per calendar month (1 credit per request, no overage)
+  - 10 requests per minute
 
-  SEH respects these limits automatically. If you hit the daily limit,
-  wait until the next day or contact SolarEdge for a higher quota.
+  SEH paces requests automatically and keeps a monthly credit count in
+  SEH_USAGE_FILE; it stops before the budget is exceeded. A daily
+  incremental sync uses about 10 credits. See 'seh status --diagnostics'.
 """
 
 STATUS_HELP = """
@@ -201,6 +218,69 @@ OUTPUT COLUMNS:
   Records      - Total number of records in database
   Status       - Success, Error, or Partial
 """
+
+AUTH_HELP = """
+Sign in to SolarEdge (Monitoring API V2, OAuth Site Access).
+
+SolarEdge API V2 uses OAuth instead of a static API key. Sign in once with
+'seh auth login'; seh then refreshes its token automatically on every run.
+Tokens are stored in SEH_TOKEN_FILE (default ~/.config/seh/tokens.json) with
+owner-only permissions.
+
+SETUP:
+  1. Create an app at https://developer.solaredge.com/ with Site Access and the
+     redirect URI http://127.0.0.1:8765/callback
+  2. Put its credentials and your site ID in .env:
+       SEH_OAUTH_CLIENT_ID=...
+       SEH_OAUTH_CLIENT_SECRET=...
+       SEH_SITE_IDS=1234567
+  3. Run: seh auth login
+
+HEADLESS SERVERS:
+  The sign-in page redirects your browser to 127.0.0.1:8765, i.e. the machine the
+  browser runs on. To sign in on a server without a browser, forward the port
+  from your desktop first and keep the session open:
+
+    ssh -L 8765:127.0.0.1:8765 user@server
+    seh auth login            (on the server, then open the printed URL locally)
+
+  Or use 'seh auth login --paste' and paste the address of the page the browser
+  lands on (it will fail to load; that is expected).
+
+Signing in again is only needed if seh does not run for 30 days or the 24-month
+grant expires.
+"""
+
+
+API_HELP = """
+Low-level access to the SolarEdge Monitoring API V2, for diagnostics.
+
+Uses seh's own sign-in, rate limiting, and monthly credit count. Each request
+costs 1 API credit. Run it where seh normally syncs, because a sign-in must
+only be used on one machine.
+"""
+
+API_GET_HELP = """
+Fetch one V2 resource and print the raw JSON response.
+
+PATH is relative to the V2 base URL. "{site}" in PATH is replaced with --site
+(default: the first ID in SEH_SITE_IDS). Time ranges are not split, so stay
+within SolarEdge's limits (QUARTER_HOUR 1 week, HOUR 24 hours, DAY 1 month)
+and give from/to as UTC instants.
+
+The JSON goes to stdout (or --output); status messages go to stderr, so the
+output can be piped, for example into jq.
+
+EXAMPLES:
+
+\b
+  seh api get /sites/{site}
+  seh api get /sites/{site}/alerts -p alerts-in-page=100
+  seh api get /sites/{site}/storage/telemetry -p resolution=HOUR \\
+      -p from=2026-10-12T00:00:00Z -p to=2026-10-12T12:00:00Z
+  seh api get /sites/{site}/devices -p types=BATTERY -p types=METER -o devices.json
+"""
+
 
 EXPORT_HELP = """
 Export data from the database to files for external analysis.
@@ -262,23 +342,23 @@ def load_settings(config_path: str | None = None):
     Returns:
         Validated Settings object.
     """
-    if config_path:
-        os.environ["SEH_ENV_FILE"] = config_path
-
-    # Clear cached settings to pick up new env file
+    # Clear cached settings so a changed environment or file is picked up
     from seh.config.settings import get_settings
+
     get_settings.cache_clear()
 
     try:
         from seh.config.logging import configure_logging
-        from seh.config.settings import get_settings
 
-        settings = get_settings()
+        settings = get_settings(config_path)
         configure_logging(settings)
         return settings
     except Exception as e:
         console.print(f"[red]Configuration error:[/red] {e}")
-        console.print("\n[yellow]Hint:[/yellow] Create a .env file with SEH_API_KEY=your_key")
+        console.print(
+            "\n[yellow]Hint:[/yellow] Set SEH_OAUTH_CLIENT_ID, SEH_OAUTH_CLIENT_SECRET and "
+            "SEH_SITE_IDS in .env, then run 'seh auth login'."
+        )
         console.print("See .env.example for all available options.")
         raise SystemExit(1) from None
 
@@ -306,7 +386,7 @@ def parse_site_ids(sites_str: str | None) -> list[int] | None:
     "--config",
     "-c",
     type=click.Path(exists=True),
-    help="Path to .env configuration file.",
+    help="Path to a .env configuration file (default: .env in the current directory). Environment variables still take precedence.",
 )
 @click.option(
     "--verbose",
@@ -314,7 +394,7 @@ def parse_site_ids(sites_str: str | None) -> list[int] | None:
     is_flag=True,
     help="Enable verbose output (sets log level to DEBUG).",
 )
-@click.version_option(version="0.2.0", prog_name="seh")
+@click.version_option(version=__version__, prog_name="seh")
 @click.pass_context
 def cli(ctx: click.Context, config: str | None, verbose: bool) -> None:
     """SolarEdge Harvest - Download SolarEdge data to a database."""
@@ -400,11 +480,11 @@ def init_db(ctx: click.Context) -> None:
 @cli.command(help="""
 Check API connectivity and list available sites.
 
-Validates your API key and displays all sites accessible with your credentials.
+Verifies your SolarEdge sign-in and shows the sites configured in SEH_SITE_IDS.
 Use this command to verify configuration before running sync.
 
 By default, also probes all API endpoints to detect which ones are available
-for your account. Endpoints that return errors (400, 403, etc.) can be
+for your account (about 10 API credits). Endpoints that return errors (400, 403, etc.) can be
 automatically excluded from future syncs to prevent log pollution.
 
 EXAMPLES:
@@ -427,9 +507,9 @@ OUTPUT:
   - Option to exclude failing endpoints from future syncs
 
 TROUBLESHOOTING:
-  "API check failed: 401" - Invalid API key
-  "API check failed: 403" - API key lacks permissions for this site
-  "No sites found" - API key is valid but has no associated sites
+  "Not signed in" / "rejected"  - Run 'seh auth login'
+  "HTTP 403"                    - Your API plan or sign-in does not cover this data
+  "No sites configured"         - Set SEH_SITE_IDS
 """)
 @click.option(
     "--probe/--no-probe",
@@ -462,7 +542,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
             return client, sites
 
     async def _probe_endpoints(client: SolarEdgeClient, site_id: int) -> dict[str, dict]:
-        """Probe all API endpoints for a site.
+        """Probe each V2 endpoint once for a site (about 10 API credits).
 
         Returns:
             Dict mapping data_type to {status: str, code: int|None, notes: str}
@@ -471,93 +551,53 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
         results: dict[str, dict] = {}
         now = datetime.now()
-        yesterday = now - timedelta(days=1)
+        hour_ago = now - timedelta(hours=1)
 
-        # Probe site details
-        try:
-            await client.get_site_details(site_id)
-            results["site"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["site"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe equipment
-        equipment_list = []
-        try:
-            equipment_list = await client.get_equipment(site_id)
-            count = len(equipment_list)
-            results["equipment"] = {"status": "ok", "code": None, "notes": f"{count} inverter(s)" if count else "No equipment"}
-        except APIError as e:
-            results["equipment"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe energy
-        try:
-            await client.get_energy(site_id, yesterday.date(), now.date())
-            results["energy"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["energy"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe power
-        try:
-            await client.get_power(site_id, yesterday, now)
-            results["power"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["power"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe storage
-        try:
-            storage_data = await client.get_storage_data(site_id, yesterday, now)
-            batteries = storage_data.get("batteries", [])
-            results["storage"] = {"status": "ok", "code": None, "notes": f"{len(batteries)} battery(ies)" if batteries else "No batteries"}
-        except APIError as e:
-            results["storage"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe meters
-        try:
-            meters = await client.get_meters(site_id)
-            count = len(meters)
-            results["meter"] = {"status": "ok", "code": None, "notes": f"{count} meter(s)" if count else "No meters"}
-        except APIError as e:
-            results["meter"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe environmental benefits
-        try:
-            await client.get_environmental_benefits(site_id)
-            results["environmental"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["environmental"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe alerts
-        try:
-            alerts = await client.get_alerts(site_id)
-            count = len(alerts)
-            results["alert"] = {"status": "ok", "code": None, "notes": f"{count} alert(s)" if count else "No alerts"}
-        except APIError as e:
-            results["alert"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe inventory
-        try:
-            await client.get_inventory(site_id)
-            results["inventory"] = {"status": "ok", "code": None, "notes": ""}
-        except APIError as e:
-            results["inventory"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-
-        # Probe inverter telemetry (requires equipment)
-        if equipment_list:
+        async def attempt(data_type: str, call, describe=lambda _r: "") -> None:
             try:
-                serial = equipment_list[0].get("serialNumber")
-                if serial:
-                    await client.get_inverter_data(site_id, serial, yesterday, now)
-                    results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": ""}
-                else:
-                    results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": "No serial found"}
+                response = await call()
+                results[data_type] = {"status": "ok", "code": None, "notes": describe(response)}
             except APIError as e:
-                results["inverter_telemetry"] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
-        else:
-            results["inverter_telemetry"] = {"status": "ok", "code": None, "notes": "No equipment to probe"}
+                results[data_type] = {"status": "error", "code": e.status_code, "notes": str(e)[:50]}
 
-        # Optimizer telemetry - typically accessed via inverter data endpoint
-        # We'll mark it as requiring equipment similar to inverter telemetry
-        results["optimizer_telemetry"] = {"status": "ok", "code": None, "notes": "Requires optimizer serial"}
+        def count_of(kind: str, label: str, plural: str):
+            def describe(devices: list[dict]) -> str:
+                n = sum(1 for d in devices if d.get("type") == kind)
+                return f"{n} {label}(s)" if n else f"No {plural}"
+
+            return describe
+
+        await attempt("site", lambda: client.get_site(site_id))
+        await attempt("equipment", lambda: client.get_devices(site_id), count_of("INVERTER", "inverter", "inverters"))
+        await attempt(
+            "inventory",
+            lambda: client.get_devices(site_id),
+            lambda devices: f"{len(devices)} device(s)",
+        )
+        await attempt("energy", lambda: client.get_energy(site_id, now.date(), now))
+        await attempt(
+            "power",
+            lambda: client.get_power(site_id, hour_ago, now),
+        )
+        await attempt("power_details", lambda: client.get_meters_telemetry(site_id, hour_ago, now))
+        await attempt("meter", lambda: client.get_devices(site_id), count_of("METER", "meter", "meters"))
+        await attempt("storage", lambda: client.get_devices(site_id), count_of("BATTERY", "battery", "batteries"))
+        await attempt("environmental", lambda: client.get_environmental_benefits(site_id))
+        await attempt(
+            "alert",
+            lambda: client.get_alerts(site_id),
+            lambda alerts: f"{len(alerts)} alert(s)" if alerts else "No alerts",
+        )
+        await attempt(
+            "inverter_telemetry",
+            lambda: client.get_inverters_telemetry(site_id, hour_ago, now),
+            lambda inverters: f"{len(inverters)} inverter(s) reporting",
+        )
+        results["optimizer_telemetry"] = {
+            "status": "error",
+            "code": None,
+            "notes": "Not available in API V2",
+        }
 
         return results
 
@@ -565,7 +605,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
         _, sites = run_async(_check())
 
         if not sites:
-            console.print("[yellow]No sites found for this API key.[/yellow]")
+            console.print("[yellow]No sites configured (set SEH_SITE_IDS).[/yellow]")
             return
 
         # Display sites table
@@ -591,9 +631,9 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
                 last_str = "-"
 
             table.add_row(
-                str(site.get("id")),
+                str(site.get("siteId")),
                 site.get("name", "Unknown"),
-                site.get("status", "-"),
+                (site.get("activationStatus") or "-").title(),
                 peak_str,
                 last_str,
             )
@@ -604,7 +644,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
         # Endpoint probing
         if probe:
             first_site = sites[0]
-            site_id = first_site.get("id")
+            site_id = first_site.get("siteId")
             site_name = first_site.get("name", "Unknown")
 
             console.print(f"\n[bold]Probing API endpoints for site {site_id} ({site_name})...[/bold]")
@@ -623,9 +663,9 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
             failed_types: list[str] = []
             data_type_order = [
-                "site", "equipment", "energy", "power", "storage",
+                "site", "equipment", "energy", "power", "power_details", "storage",
                 "meter", "environmental", "alert", "inventory",
-                "inverter_telemetry", "optimizer_telemetry"
+                "inverter_telemetry", "optimizer_telemetry",
             ]
 
             for data_type in data_type_order:
@@ -650,6 +690,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
                 # Check current skip list
                 current_skip = settings.get_skip_data_types_list() or []
+                env_path = ctx.obj.get("config_path") or ".env"
                 new_skips = [t for t in failed_types if t not in current_skip]
 
                 if new_skips:
@@ -658,21 +699,21 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
 
                     if update_config:
                         # Auto-update without prompting
-                        update_env_file("SEH_SKIP_DATA_TYPES", skip_value)
-                        console.print(f"\n[green]Updated .env with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
+                        update_env_file("SEH_SKIP_DATA_TYPES", skip_value, env_path)
+                        console.print(f"\n[green]Updated {env_path} with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
                     else:
                         # Prompt user
                         console.print("\nWould you like to exclude these from future syncs?")
                         console.print(f"This will set: SEH_SKIP_DATA_TYPES={skip_value}")
-                        response = click.prompt("Update .env?", type=click.Choice(["y", "n"], case_sensitive=False), default="y")
+                        response = click.prompt(f"Update {env_path}?", type=click.Choice(["y", "n"], case_sensitive=False), default="y")
 
                         if response.lower() == "y":
-                            update_env_file("SEH_SKIP_DATA_TYPES", skip_value)
-                            console.print(f"\n[green]Updated .env with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
+                            update_env_file("SEH_SKIP_DATA_TYPES", skip_value, env_path)
+                            console.print(f"\n[green]Updated {env_path} with:[/green] SEH_SKIP_DATA_TYPES={skip_value}")
                         else:
-                            console.print("\n[yellow]Skipped .env update[/yellow]")
+                            console.print(f"\n[yellow]Skipped {env_path} update[/yellow]")
 
-                    console.print("\n[dim]Tip: Run 'seh check-api' again after API key changes to reassess.[/dim]")
+                    console.print("\n[dim]Tip: Run 'seh check-api' again after SolarEdge plan changes to reassess.[/dim]")
                 else:
                     console.print("\n[dim]All failing endpoints already in skip list.[/dim]")
             else:
@@ -684,6 +725,284 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
         console.print(f"[red]API check failed:[/red] {e}")
         logger.error("API check failed", error=str(e))
         raise SystemExit(1) from None
+
+
+# =============================================================================
+# Authentication (OAuth2 Site Access)
+# =============================================================================
+
+
+def _fail(message: str) -> None:
+    console.print(f"[red]{message}[/red]")
+    raise SystemExit(1)
+
+
+def _browser_available() -> bool:
+    """False on headless Linux/BSD, where opening a browser cannot work."""
+    import sys
+
+    if sys.platform.startswith(("linux", "freebsd", "openbsd")):
+        return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    return True
+
+
+@cli.group(help=AUTH_HELP)
+def auth() -> None:
+    """Sign in to SolarEdge."""
+
+
+@auth.command(
+    "login",
+    help="Sign in to SolarEdge and store OAuth tokens. See 'seh auth --help' for headless use.",
+)
+@click.option("--paste", is_flag=True, help="Paste the redirect URL instead of using the local listener.")
+@click.option("--no-browser", is_flag=True, help="Print the sign-in URL without opening a browser.")
+@click.option(
+    "--timeout",
+    type=click.IntRange(30, 1800),
+    default=300,
+    show_default=True,
+    help="Seconds to wait for the sign-in redirect.",
+)
+@click.pass_context
+def auth_login(ctx: click.Context, paste: bool, no_browser: bool, timeout: int) -> None:
+    """Interactive OAuth sign-in."""
+    import threading
+    import webbrowser
+
+    from seh.api.auth import OAuthTokenManager
+    from seh.api.oauth_login import (
+        CallbackResult,
+        LoginRequest,
+        build_authorize_url,
+        ensure_port_free,
+        parse_redirect_url,
+        validate_callback,
+        wait_for_callback,
+    )
+    from seh.utils.exceptions import SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    try:
+        site_ids = settings.require_site_ids()
+        request = LoginRequest.new()
+        url = build_authorize_url(settings, request)
+
+        def validate(query: dict[str, str]) -> CallbackResult:
+            return validate_callback(query, request, site_ids)
+
+        if not paste:
+            ensure_port_free(settings.oauth_redirect_port)
+
+        console.print(
+            "[bold]Sign in to SolarEdge[/bold] and approve access for site(s) "
+            f"{', '.join(map(str, site_ids))}:\n"
+        )
+        console.print(url, soft_wrap=True)
+        console.print()
+
+        open_browser = not no_browser and _browser_available()
+        if paste:
+            if open_browser:
+                webbrowser.open(url)
+            console.print(
+                "After approving, the browser lands on a page that fails to load. "
+                "Copy that page's full address."
+            )
+            # Hidden: the pasted address contains the authorization code.
+            pasted = click.prompt("Paste the address", hide_input=True)
+            result = validate(parse_redirect_url(pasted))
+        else:
+            if not open_browser:
+                port = settings.oauth_redirect_port
+                console.print(
+                    "[yellow]No browser on this machine.[/yellow] Open the URL above on your "
+                    "desktop. If this is a remote server, first run on your desktop:\n"
+                    f"  ssh -L {port}:127.0.0.1:{port} <user>@<this-server>\n"
+                )
+            ready = threading.Event()
+            holder: dict[str, object] = {}
+
+            def listen() -> None:
+                try:
+                    holder["result"] = wait_for_callback(
+                        settings.oauth_redirect_port, timeout, validate, ready
+                    )
+                except Exception as exc:  # re-raised in the main thread
+                    holder["error"] = exc
+
+            thread = threading.Thread(target=listen, daemon=True)
+            thread.start()
+            ready.wait(5)
+            if open_browser:
+                webbrowser.open(url)
+            console.print(
+                f"Waiting up to {timeout}s for the sign-in redirect on "
+                f"{settings.oauth_redirect_uri} ..."
+            )
+            thread.join()
+            if "error" in holder:
+                raise holder["error"]  # type: ignore[misc]
+            result = holder["result"]  # type: ignore[assignment]
+
+        manager = OAuthTokenManager(settings)
+        tokens = run_async(
+            manager.exchange_code(result.code, request.code_verifier, result.site_id)
+        )
+    except SEHError as exc:
+        _fail(str(exc))
+        return
+
+    console.print(f"\n[green]Signed in[/green] for site {tokens.site_id}.")
+    console.print(f"  Token file: {settings.token_path}")
+    console.print(
+        f"  Access token valid until: {tokens.expires_at.astimezone():%Y-%m-%d %H:%M %Z}"
+    )
+
+
+@auth.command("status", help="Show whether seh is signed in (uses no API credits).")
+@click.option(
+    "--refresh",
+    is_flag=True,
+    help="Also refresh the access token now, to prove the stored sign-in still works.",
+)
+@click.pass_context
+def auth_status(ctx: click.Context, refresh: bool) -> None:
+    """Show sign-in state without revealing tokens."""
+    from datetime import UTC
+
+    from seh.api.auth import OAuthTokenManager
+    from seh.utils.exceptions import SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    manager = OAuthTokenManager(settings)
+    try:
+        tokens = manager.store.load()
+        if tokens is None:
+            _fail(f"Not signed in (no token file at {settings.token_path}). Run 'seh auth login'.")
+            return
+        if refresh:
+            run_async(manager.handle_unauthorized(tokens.access_token.get_secret_value()))
+            tokens = manager.store.load() or tokens
+    except SEHError as exc:
+        _fail(str(exc))
+        return
+
+    now = datetime.now(UTC)
+    state = "valid" if tokens.expires_at > now else "expired (renewed automatically on next use)"
+    console.print("[green]Signed in[/green]")
+    console.print(f"  Site: {tokens.site_id}")
+    console.print(f"  Token file: {settings.token_path}")
+    console.print(f"  Last refreshed: {tokens.obtained_at.astimezone():%Y-%m-%d %H:%M %Z}")
+    console.print(
+        f"  Access token: {state}, expires {tokens.expires_at.astimezone():%Y-%m-%d %H:%M %Z}"
+    )
+    if refresh:
+        console.print("  [green]Refresh succeeded.[/green]")
+
+
+@auth.command("logout", help="Revoke the stored sign-in at SolarEdge and delete the token file.")
+@click.option("--yes", "-y", is_flag=True, help="Do not ask for confirmation.")
+@click.pass_context
+def auth_logout(ctx: click.Context, yes: bool) -> None:
+    """Revoke and delete stored tokens."""
+    from seh.api.auth import OAuthTokenManager
+    from seh.utils.exceptions import SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    if not yes:
+        click.confirm("Sign out? Syncs will fail until you run 'seh auth login' again", abort=True)
+    try:
+        revoked = run_async(OAuthTokenManager(settings).revoke())
+    except SEHError as exc:
+        _fail(str(exc))
+        return
+    if revoked:
+        console.print("[green]Signed out.[/green] SolarEdge revoked the token; local file deleted.")
+    else:
+        console.print(
+            "[yellow]Local token file deleted, but SolarEdge did not confirm revocation.[/yellow] "
+            "You can also remove access in your SolarEdge account."
+        )
+
+
+# =============================================================================
+# Raw API access (diagnostics)
+# =============================================================================
+
+
+@cli.group(help=API_HELP)
+def api() -> None:
+    """Low-level SolarEdge API access."""
+
+
+@api.command("get", help=API_GET_HELP)
+@click.argument("path")
+@click.option(
+    "--param",
+    "-p",
+    "params",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Query parameter (repeatable; repeat a key to send it several times).",
+)
+@click.option("--site", type=int, help="Site ID for {site} in PATH (default: first SEH_SITE_IDS).")
+@click.option(
+    "--output",
+    "-o",
+    type=click.Path(dir_okay=False),
+    help="Write the JSON to this file (created readable only by you) instead of stdout.",
+)
+@click.pass_context
+def api_get(
+    ctx: click.Context, path: str, params: tuple[str, ...], site: int | None, output: str | None
+) -> None:
+    """Print the raw JSON of one V2 request."""
+    from seh.api.client import SolarEdgeClient, validate_raw_path
+    from seh.utils.exceptions import APIError, SEHError
+
+    settings = load_settings(ctx.obj.get("config_path"))
+    err = Console(stderr=True)
+
+    query: list[tuple[str, str]] = []
+    for item in params:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            err.print(f"[red]Invalid --param {item!r}: use KEY=VALUE.[/red]")
+            raise SystemExit(2)
+        query.append((key, value))
+
+    try:
+        if "{site}" in path:
+            path = path.replace("{site}", str(site or settings.require_site_ids()[0]))
+        path = validate_raw_path(path)
+
+        async def _get():
+            async with SolarEdgeClient(settings) as client:
+                data = await client.get_raw(path, query)
+                return data, client.credits_used()
+
+        data, usage = run_async(_get())
+    except ValueError as e:
+        err.print(f"[red]{e}[/red]")
+        raise SystemExit(2) from None
+    except APIError as e:
+        err.print(f"[red]Request failed:[/red] {e}")
+        raise SystemExit(1) from None
+    except SEHError as e:
+        err.print(f"[red]{e}[/red]")
+        raise SystemExit(1) from None
+
+    text = json.dumps(data, indent=2, ensure_ascii=False)
+    if output:
+        fd = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+        err.print(f"[green]Wrote {output}[/green]")
+    else:
+        click.echo(text)
+    if usage:
+        err.print(f"[dim]1 API credit used ({usage[1]} this month, {usage[0]}).[/dim]")
 
 
 @cli.command(help=SYNC_HELP)
@@ -849,7 +1168,15 @@ def status(ctx: click.Context, diagnostics: bool, sites_str: str | None) -> None
         # API configuration
         console.print(f"\n  API Base URL: {settings.api_base_url}")
         console.print(f"  Max Concurrent: {settings.api_max_concurrent}")
-        console.print(f"  Daily Limit: {settings.api_daily_limit}")
+        console.print(f"  Rate Limit: {settings.api_per_minute_limit} calls/minute")
+        console.print(f"  Monthly Credit Budget: {settings.api_monthly_credits}")
+        try:
+            from seh.api.rate_limiter import CreditLedger
+
+            month, used = CreditLedger(settings.usage_path, settings.api_monthly_credits).usage()
+            console.print(f"  Credits Used ({month}): {used}")
+        except OSError as e:
+            console.print(f"  Credits Used: unavailable ({e})")
         console.print(f"  Request Timeout: {settings.api_timeout}s")
 
         # Sync configuration
@@ -1379,88 +1706,28 @@ EXAMPLES:
   seh export dump -o backup.sql       # Specific filename
 
 NOTE: For large databases, this may take some time and
-produce large files.
+produce large files. The dump file is created readable only by you,
+and the database password is never put on the command line.
 """)
 @click.option("--output", "-o", type=click.Path(), help="Output file path.")
 @click.pass_context
 def export_dump(ctx: click.Context, output: str | None) -> None:
     """Export database to SQL dump."""
+    from seh.db.dump import DumpError, dump_database
+
     settings = load_settings(ctx.obj.get("config_path"))
 
     if output is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output = f"seh_dump_{timestamp}.sql"
 
-    db_url = settings.database_url
-
     try:
-        if "sqlite" in db_url:
-            # SQLite dump
-            db_path = db_url.replace("sqlite:///", "")
-            result = subprocess.run(
-                ["sqlite3", db_path, ".dump"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            with open(output, "w") as f:
-                f.write(result.stdout)
-
-        elif "postgresql" in db_url:
-            # PostgreSQL dump using pg_dump
-            # Extract connection info from URL
-            # Format: postgresql+psycopg://user:pass@host:port/db
-            import urllib.parse
-            parsed = urllib.parse.urlparse(db_url.replace("+psycopg", ""))
-
-            env = os.environ.copy()
-            if parsed.password:
-                env["PGPASSWORD"] = parsed.password
-
-            cmd = ["pg_dump"]
-            if parsed.hostname:
-                cmd.extend(["-h", parsed.hostname])
-            if parsed.port:
-                cmd.extend(["-p", str(parsed.port)])
-            if parsed.username:
-                cmd.extend(["-U", parsed.username])
-            cmd.extend(["-f", output, parsed.path.lstrip("/")])
-
-            subprocess.run(cmd, env=env, check=True)
-
-        elif "mariadb" in db_url or "mysql" in db_url:
-            # MariaDB/MySQL dump using mysqldump
-            import urllib.parse
-            parsed = urllib.parse.urlparse(db_url.replace("+mariadbconnector", "").replace("+pymysql", ""))
-
-            cmd = ["mysqldump"]
-            if parsed.hostname:
-                cmd.extend(["-h", parsed.hostname])
-            if parsed.port:
-                cmd.extend(["-P", str(parsed.port)])
-            if parsed.username:
-                cmd.extend(["-u", parsed.username])
-            if parsed.password:
-                cmd.append(f"-p{parsed.password}")
-            cmd.append(parsed.path.lstrip("/"))
-
-            with open(output, "w") as f:
-                subprocess.run(cmd, stdout=f, check=True)
-
-        else:
-            console.print(f"[red]Unsupported database type for dump: {db_url}[/red]")
-            raise SystemExit(1)
-
-        console.print(f"[green]Database exported to {output}[/green]")
-
-    except subprocess.CalledProcessError as e:
+        dump_database(settings.database_url, output)
+    except DumpError as e:
         console.print(f"[red]Dump failed:[/red] {e}")
         raise SystemExit(1) from None
-    except FileNotFoundError as e:
-        console.print(f"[red]Dump tool not found:[/red] {e}")
-        console.print("[yellow]Ensure sqlite3/pg_dump/mysqldump is installed and in PATH[/yellow]")
-        raise SystemExit(1) from None
 
+    console.print(f"[green]Database exported to {output}[/green] (readable only by you)")
 
 if __name__ == "__main__":
     cli()

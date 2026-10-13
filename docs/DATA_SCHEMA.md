@@ -2,6 +2,8 @@
 
 This document describes all data structures in the SolarEdge Harvest (seh) database.
 
+Since **v0.3.0** seh collects data from the SolarEdge Monitoring **API V2**. The schema did not change; each table below notes its V2 source and which columns V2 no longer fills. See [MIGRATING_TO_API_V2.md](MIGRATING_TO_API_V2.md) for the upgrade.
+
 **Note:** All tables are prefixed with `seh_` and all views are prefixed with `v_seh_` to avoid naming conflicts.
 
 ## Entity Relationship Diagram
@@ -131,9 +133,13 @@ erDiagram
 
 ## Tables
 
+**Timestamps** are stored without a timezone, in the site's local time (V2 returns ISO-8601 with the site's UTC offset, which seh drops). Series timestamps mark the start of the interval. When clocks fall back, the repeated hour overwrites the first occurrence.
+
 ### seh_sites
 
 The central entity representing a SolarEdge installation site.
+
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}`. Filled from V2: name, account_id, status (`Active`, from `activationStatus`), peak_power, notes, location fields, timezone, last_update_time (converted to site-local time), installation_date (calendar date). **Not provided by V2** (keep their last V1 value): currency, site_type, primary_module_*, is_public, public_name.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -170,6 +176,8 @@ The central entity representing a SolarEdge installation site.
 
 Equipment associated with a site (inverters, optimizers, gateways).
 
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/devices` (type INVERTER). Inverters only. model comes from V2 `partNumber`, communication_method from `communicationType`, and cpu_version holds the V2 firmware version. **Not provided by V2** (keep their last V1 value): dsp1_version, dsp2_version, last_report_date. Optimizers are listed in `seh_inventory`, not here.
+
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
@@ -200,6 +208,8 @@ Equipment associated with a site (inverters, optimizers, gateways).
 
 Battery storage units associated with a site.
 
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/devices` (type BATTERY) plus the newest point of `GET /v2/sites/{id}/storage/telemetry` (last 24 h): last_power (charge minus discharge, positive = charging), last_state_of_charge, last_telemetry_time. capacity, last_status and the lifetime counters are not filled. No telemetry request is made when the site has no battery. The V2 storage telemetry format has not been verified against a real battery.
+
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
@@ -228,7 +238,9 @@ Battery storage units associated with a site.
 
 ### seh_energy_readings
 
-Daily or monthly energy production readings.
+Daily energy production readings.
+
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/energy?resolution=DAY&unit=WH` (requests split into 28-day windows). Daily values only (`time_unit = 'DAY'`); today's value is partial until the day ends.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -247,7 +259,9 @@ Daily or monthly energy production readings.
 
 ### seh_power_readings
 
-Instantaneous power readings (typically 15-minute intervals).
+Average power per 15-minute interval.
+
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/power?resolution=QUARTER_HOUR&unit=W` (1-week windows). 15-minute average power; the timestamp is the start of the interval in site-local time. Intervals without data yet are not stored.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -267,6 +281,8 @@ Instantaneous power readings (typically 15-minute intervals).
 
 Power flow snapshots showing energy distribution between PV, grid, load, and storage.
 
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/power-flow` (available on the Free tier), one snapshot per sync. timestamp is SolarEdge's `updatedAt`. Status columns keep the V1 meaning: `Active` when the component is moving power, `Idle` when its power is 0 or it is inactive (V2 marks PV active at night). Powers are magnitudes in kW; V2 reports grid direction (IMPORT/EXPORT) but it is not stored. storage_critical is not provided by V2.
+
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
@@ -274,7 +290,7 @@ Power flow snapshots showing energy distribution between PV, grid, load, and sto
 | `timestamp` | DATETIME | No | Reading timestamp |
 | `unit` | VARCHAR(20) | Yes | Power unit (kW, W) |
 | `grid_status` | VARCHAR(20) | Yes | Grid connection status |
-| `grid_power` | FLOAT | Yes | Grid power (positive=export, negative=import), unit per `unit` column |
+| `grid_power` | FLOAT | Yes | Grid power magnitude, unit per `unit` column (direction not stored) |
 | `pv_status` | VARCHAR(20) | Yes | PV production status |
 | `pv_power` | FLOAT | Yes | PV production power, unit per `unit` column |
 | `load_status` | VARCHAR(20) | Yes | Load consumption status |
@@ -295,7 +311,7 @@ Power flow snapshots showing energy distribution between PV, grid, load, and sto
 
 ### seh_power_details
 
-Historical 15-minute time-series of five power meter types from the SolarEdge `powerDetails` API endpoint. All values are stored in **Watts** (W).
+Historical 15-minute time-series of five power series. All values are stored in **Watts** (W). Since v0.3.0 (API V2) production, purchased (import), and feed-in (export) come from meter telemetry; consumption = production + purchased - feed-in and self-consumption = production - feed-in.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -313,7 +329,7 @@ Historical 15-minute time-series of five power meter types from the SolarEdge `p
 **Unique Constraints:** `(site_id, timestamp)` named `uq_power_details`
 **Indexes:** `site_id`, `timestamp`
 
-**API Source:** `GET /site/{id}/powerDetails` — limited to strictly less than 1 calendar month per request (25-day chunks used internally).
+**API Source:** `GET /v2/sites/{id}/meters/telemetry?resolution=QUARTER_HOUR` (1-week windows). Before v0.3.0: V1 `GET /site/{id}/powerDetails`.
 
 **Unit note:** The chart layer (`seh_weekly_power_chart.py`) converts W → kW for display.
 
@@ -323,6 +339,8 @@ Historical 15-minute time-series of five power meter types from the SolarEdge `p
 
 Meter devices associated with a site.
 
+**Source (API V2, since 0.3.0):** Meter devices from `GET /v2/sites/{id}/devices` (type METER), including virtual meters such as Consumption and Self Consumption. meter_type uses V1 vocabulary (Production, Purchased, FeedIn, Consumption, SelfConsumption), derived from the meter name. connection_type holds the serial of the device the meter connects to. Populated only when the `meter` data type is not skipped.
+
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
@@ -330,7 +348,7 @@ Meter devices associated with a site.
 | `name` | VARCHAR(100) | No | Meter name/label |
 | `manufacturer` | VARCHAR(100) | Yes | Meter manufacturer |
 | `model` | VARCHAR(100) | Yes | Meter model |
-| `meter_type` | VARCHAR(50) | Yes | Type: Production, Consumption, Feed-in |
+| `meter_type` | VARCHAR(50) | Yes | Type: Production, Consumption, SelfConsumption, FeedIn, Purchased |
 | `serial_number` | VARCHAR(100) | Yes | Meter serial number |
 | `connection_type` | VARCHAR(50) | Yes | Connection type |
 | `form` | VARCHAR(50) | Yes | Meter form factor |
@@ -345,6 +363,8 @@ Meter devices associated with a site.
 ### seh_meter_readings
 
 Time-series readings from meters.
+
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/meters/telemetry?resolution=QUARTER_HOUR` (1-week windows). One reading per 15 minutes for the Production, Import and Export meters: `power` only (W, interval average). **Not provided by V2:** energy_lifetime, voltages, currents, power factors.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -375,12 +395,14 @@ Time-series readings from meters.
 
 System alerts and notifications for a site.
 
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/alerts` (all pages). severity holds the V2 `impact` value as text; alert_type from `type`; name from the component name (or category); serial_number from the component. The V2 alert format has not been verified against a real alert. If the plan does not include alerts, the data type is recorded as `skipped`.
+
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
 | `site_id` | INTEGER | No | Foreign key to seh_sites.id |
 | `alert_id` | INTEGER | No | SolarEdge alert ID |
-| `severity` | VARCHAR(20) | Yes | Severity: HIGH, MEDIUM, LOW |
+| `severity` | VARCHAR(20) | Yes | Severity (V1: HIGH, MEDIUM, LOW; V2: impact level as text) |
 | `alert_type` | VARCHAR(100) | Yes | Alert type classification |
 | `alert_code` | INTEGER | Yes | Numeric alert code |
 | `name` | VARCHAR(255) | Yes | Alert name |
@@ -398,6 +420,8 @@ System alerts and notifications for a site.
 ### seh_environmental_benefits
 
 Environmental impact calculations for a site.
+
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/environmental-benefits`. Filled from V2: co2_saved (`co2Emissions`) and co2_units (`KG` for METRIC, `LB` for IMPERIAL). **Not provided by V2** (keep their last V1 value): so2_saved, nox_saved, trees_planted, light_bulbs. V2 also reports EV miles, which has no column.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -422,6 +446,8 @@ Environmental impact calculations for a site.
 
 Complete inventory of equipment at a site.
 
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/devices` (types INVERTER, BATTERY, METER, OPTIMIZER). One row per device, including **optimizers** (`category = 'optimizers'`, new in V2). connected_to is the parent device serial and max_power the nameplate rating. Inverter firmware goes to cpu_version, other devices' firmware to firmware_version (as in V1). Devices without a serial use `''`.
+
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
@@ -430,7 +456,7 @@ Complete inventory of equipment at a site.
 | `manufacturer` | VARCHAR(100) | Yes | Manufacturer |
 | `model` | VARCHAR(100) | Yes | Model |
 | `serial_number` | VARCHAR(100) | Yes | Serial number |
-| `category` | VARCHAR(50) | Yes | Category: inverters, optimizers, meters, gateways |
+| `category` | VARCHAR(50) | Yes | Category: inverters, meters, batteries, optimizers, gateways |
 | `firmware_version` | VARCHAR(50) | Yes | Firmware version |
 | `cpu_version` | VARCHAR(50) | Yes | CPU version |
 | `connected_optimizers` | INTEGER | Yes | Number of connected optimizers |
@@ -448,7 +474,9 @@ Complete inventory of equipment at a site.
 
 ### seh_inverter_telemetry
 
-Detailed inverter telemetry data at 5-minute intervals.
+Detailed inverter telemetry (V1: about 5-minute samples; V2: 15-minute averages).
+
+**Source (API V2, since 0.3.0):** `GET /v2/sites/{id}/inverters/telemetry?resolution=QUARTER_HOUR` (1-week windows). Rows written since 0.3.0 are **15-minute averages** with total_active_power and active_power (both the inverter's AC power), ac_voltage, ac_current, ac_frequency. **Not provided by V2** (NULL in V2 rows): total_energy, power_limit, temperature, inverter_mode, operation_mode, apparent_power, reactive_power, cos_phi, dc_voltage. Rows from V1 (about 5-minute intervals) are unchanged, so the table mixes both resolutions over time. The inverter reports nothing at night.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -480,7 +508,9 @@ Detailed inverter telemetry data at 5-minute intervals.
 
 ### seh_optimizer_telemetry
 
-Power optimizer telemetry data at 5-minute intervals.
+Power optimizer telemetry (V1 schema; not populated).
+
+**Source (API V2, since 0.3.0):** **Not available in API V2.** No rows are written; the `optimizer_telemetry` data type is recorded as `skipped` without calling the API. (seh 0.2.x never stored rows here either.)
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -512,6 +542,8 @@ Power optimizer telemetry data at 5-minute intervals.
 
 Tracks synchronization state for each data type per site.
 
+**Source (API V2, since 0.3.0):** Written by seh. Since 0.3.0, status can also be `skipped` (data the plan or site does not provide: HTTP 400/403/404, and always for optimizer telemetry). last_data_timestamp is the newest reading stored and is kept when a sync fails or returns nothing; the next incremental sync starts 15 minutes (`SEH_SYNC_OVERLAP_MINUTES`) before it.
+
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
 | `id` | INTEGER | No | Primary key (auto-increment) |
@@ -520,7 +552,7 @@ Tracks synchronization state for each data type per site.
 | `last_sync_time` | DATETIME | No | When sync was last run |
 | `last_data_timestamp` | DATETIME | Yes | Timestamp of most recent data |
 | `records_synced` | INTEGER | Yes | Number of records synced |
-| `status` | VARCHAR(20) | Yes | Status: success, partial, error |
+| `status` | VARCHAR(20) | Yes | Status: success, partial, error, skipped |
 | `error_message` | VARCHAR(500) | Yes | Error message if failed |
 | `created_at` | DATETIME | No | Record creation timestamp |
 | `updated_at` | DATETIME | No | Record update timestamp |
@@ -540,7 +572,7 @@ Tracks synchronization state for each data type per site.
 - `alert` - Alerts
 - `inventory` - Inventory
 - `inverter_telemetry` - Inverter telemetry
-- `optimizer_telemetry` - Optimizer telemetry
+- `optimizer_telemetry` - Optimizer telemetry (not available in API V2; always `skipped`)
 
 ---
 
@@ -747,7 +779,7 @@ ORDER BY site_id, month DESC
 
 All tables include audit timestamps:
 - `created_at` - Record creation time (auto-set)
-- `updated_at` - Last modification time (auto-updated)
+- `updated_at` - Last modification time (auto-updated by the ORM; the bulk upserts used for time-series tables update the values but not `updated_at`)
 
 ### Foreign Keys
 
@@ -758,11 +790,11 @@ All child tables use `ON DELETE CASCADE` for the site relationship, meaning dele
 | Measurement | Unit | Notes |
 |-------------|------|-------|
 | Energy | Watt-hours (Wh) | Divide by 1000 for kWh |
-| Power | Watts (W) | Divide by 1000 for kW |
+| Power | Watts (W) | Divide by 1000 for kW. Exception: `seh_power_flows` uses the `unit` column (kW from V2) |
 | Voltage | Volts (V) | |
 | Current | Amperes (A) | |
 | Frequency | Hertz (Hz) | |
-| Temperature | Celsius (C) | |
+| Temperature | Celsius (C) | V1 rows only; V2 provides no temperatures |
 | Charge Level | Percentage (%) | 0-100 |
 | Power Factor | Ratio | -1 to 1 |
 
@@ -772,5 +804,6 @@ All child tables use `ON DELETE CASCADE` for the site relationship, meaning dele
 
 | Date | Version | Change |
 |------|---------|--------|
+| 2026-10-13 | 0.3.0 | Migrated to API V2: power details from meter telemetry; inverter telemetry at 15-minute resolution without temperature/mode/DC voltage/power limit/reactive power; optimizer telemetry no longer collected; environmental benefits CO2 only; inventory adds optimizers; sync status `skipped` for unavailable endpoints |
 | 2026-03-13 | 0.2.0 | Added `seh_power_details` table (15-min historical power breakdown from `powerDetails` API endpoint); added `power_details` sync strategy; updated ERD to Mermaid format |
 | 2026-01 | 0.1.x | Initial schema with 14 tables |

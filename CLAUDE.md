@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SolarEdge Harvest (seh) - A Python application to download data from SolarEdge solar monitoring servers and store it in a relational database. Supports SQLite (default), PostgreSQL, and MariaDB.
 
-**Version:** 0.2.0
+**Version:** 0.3.0 (SolarEdge Monitoring API V2)
 
 ## Commands
 
@@ -18,6 +18,8 @@ uv sync
 uv run seh --help
 uv run seh --version
 uv run seh init-db
+uv run seh auth login|status|logout
+uv run seh api get /sites/{site}/alerts -p alerts-in-page=100   # raw V2 JSON, 1 credit
 uv run seh check-api
 uv run seh sync [--full] [--sites ID1,ID2]
 uv run seh status [--diagnostics]
@@ -49,9 +51,10 @@ src/seh/
 │   ├── settings.py          # Pydantic Settings (env vars, .env file)
 │   └── logging.py           # Structlog config + SyncStats + EmailNotifier
 ├── api/
-│   ├── client.py            # SolarEdgeClient - async httpx with all endpoints
-│   ├── rate_limiter.py      # RateLimiter - semaphore + daily quota
-│   └── models/responses.py  # Pydantic models for API responses
+│   ├── client.py            # SolarEdgeClient - async httpx, API V2 endpoints
+│   ├── auth.py              # OAuth token store + refresh (rotating tokens)
+│   ├── oauth_login.py       # Interactive sign-in (seh auth login)
+│   ├── rate_limiter.py      # RateLimiter - per-minute + monthly credit ledger
 ├── db/
 │   ├── base.py              # Base, TimestampMixin
 │   ├── engine.py            # create_engine(), get_session(), create_tables()
@@ -86,16 +89,20 @@ src/seh/
 │       ├── alert.py         # AlertSyncStrategy
 │       ├── environmental.py # EnvironmentalSyncStrategy
 │       ├── inventory.py     # InventorySyncStrategy
-│       └── telemetry.py     # TelemetrySyncStrategy
+│       ├── inverter_telemetry.py  # InverterTelemetrySyncStrategy
+│       └── optimizer_telemetry.py # No-op: no optimizer data in API V2
+│   (sync/v2_fields.py: V2 timestamp/field conversion helpers)
 └── utils/
-    ├── exceptions.py        # SEHError hierarchy
+    ├── exceptions.py        # SEHError hierarchy (incl. AuthenticationError)
+    ├── filelock.py          # Cross-process locks (token file, credit ledger)
     └── retry.py             # @retry_with_backoff decorator
 ```
 
 ### Data Flow
 
 1. **CLI** (`cli.py`) parses commands and loads settings
-2. **SolarEdgeClient** (`api/client.py`) makes async API requests with rate limiting
+2. **SolarEdgeClient** (`api/client.py`) makes async API V2 requests with an OAuth bearer token
+   from **OAuthTokenManager** (`api/auth.py`), rate limiting, and window splitting
 3. **SyncOrchestrator** (`sync/orchestrator.py`) coordinates sync across sites
 4. **SyncStrategies** (`sync/strategies/`) handle per-data-type logic
 5. **Repositories** (`db/repositories/`) perform upsert operations
@@ -107,7 +114,13 @@ src/seh/
 - **Strategy Pattern**: Each data type has its own sync strategy
 - **Repository Pattern**: Database operations abstracted behind repositories
 - **Upsert Pattern**: ON CONFLICT DO UPDATE for idempotent syncs
-- **Rate Limiting**: Semaphore for concurrency + rolling 24h quota tracking
+- **Rate Limiting**: Semaphore for concurrency, rolling 60 s limit (10/min), persistent monthly
+  credit ledger (`~/.config/seh/usage.json`, 2000/month) shared across processes
+- **OAuth tokens**: Rotating refresh tokens persisted atomically (0600) before use, under an
+  asyncio lock and a cross-process file lock
+- **V1 column preservation**: Strategies only upsert columns V2 provides; V1-only columns keep values
+- **Timestamps**: Naive site-local (V2 offset dropped); request ranges are UTC instants aligned to
+  interval starts
 - **Retry with Backoff**: Exponential backoff (2^n seconds, max 60s)
 
 ### Database Schema
@@ -137,36 +150,23 @@ src/seh/
 - `v_seh_power_flow_current`, `v_seh_sync_status`, `v_seh_equipment_list`
 - `v_seh_battery_status`, `v_seh_energy_monthly`
 
-### API Endpoints Used
+### API Endpoints Used (Monitoring API V2)
+
+Base URL `https://monitoringapi.solaredge.com/v2`, OAuth2 bearer token. Time ranges are UTC
+ISO-8601 instants; max window per request: QUARTER_HOUR 1 week, HOUR 24 h, DAY 1 month.
 
 ```python
-# Sites
-GET /sites/list              # List all sites
-GET /site/{id}/details       # Site details
-
-# Equipment
-GET /equipment/{id}/list     # List inverters/equipment
-GET /equipment/{id}/{sn}/data  # Inverter telemetry
-
-# Energy
-GET /site/{id}/energy        # Energy production (Wh)
-GET /site/{id}/energyDetails # Detailed energy breakdown
-
-# Power
-GET /site/{id}/power         # Power production (W)
-GET /site/{id}/powerDetails  # Detailed power breakdown
-GET /site/{id}/currentPowerFlow  # Current power flow snapshot
-
-# Storage
-GET /site/{id}/storageData   # Battery data and telemetry
-
-# Meters
-GET /site/{id}/meters        # Meter list and readings
-
-# Additional
-GET /site/{id}/envBenefits   # Environmental benefits
-GET /site/{id}/alerts        # System alerts
-GET /site/{id}/inventory     # Equipment inventory
+GET /sites/{id}                      # Site details (sites list is Fleet-only: 403 for OAuth)
+GET /sites/{id}/devices?types=...    # Inverters, meters, batteries, optimizers
+GET /sites/{id}/energy               # Energy (Wh), resolution DAY
+GET /sites/{id}/power                # Power (W), resolution QUARTER_HOUR
+GET /sites/{id}/power-flow           # Current power flow snapshot (kW)
+GET /sites/{id}/meters/telemetry     # Production/import/export -> seh_power_details, meters
+GET /sites/{id}/inverters/telemetry  # Inverter power/voltage/current/frequency
+GET /sites/{id}/storage/telemetry    # Battery telemetry
+GET /sites/{id}/environmental-benefits
+GET /sites/{id}/alerts
+POST /oauth2/token, /oauth2/revoke-token   # OAuth (sign-in at connect.solaredge.com/authorize)
 ```
 
 ## Configuration
@@ -175,13 +175,18 @@ Environment variables (prefix `SEH_`):
 
 ```bash
 # Required
-SEH_API_KEY=xxx
+SEH_OAUTH_CLIENT_ID=xxx
+SEH_OAUTH_CLIENT_SECRET=xxx
+SEH_SITE_IDS=123456  # required: V2 cannot list sites
+
+# Sign-in state and API budget
+SEH_TOKEN_FILE=~/.config/seh/tokens.json
+SEH_USAGE_FILE=~/.config/seh/usage.json
+SEH_API_MONTHLY_CREDITS=2000
+SEH_API_PER_MINUTE_LIMIT=10
 
 # Database
 SEH_DATABASE_URL=sqlite:///./seh.db
-
-# Site filtering
-SEH_SITE_IDS=123456,789012  # Optional, syncs all if not set
 
 # Data type filtering (skip unavailable endpoints)
 SEH_SKIP_DATA_TYPES=meter,alert  # Comma-separated list of data types to skip
@@ -190,9 +195,9 @@ SEH_SKIP_DATA_TYPES=meter,alert  # Comma-separated list of data types to skip
 # Sync settings
 SEH_ENERGY_LOOKBACK_DAYS=365
 SEH_POWER_LOOKBACK_DAYS=7
-SEH_POWER_DETAILS_LOOKBACK_DAYS=25  # Max 25 days (API limit: strictly < 1 calendar month)
+SEH_POWER_DETAILS_LOOKBACK_DAYS=25
 SEH_SYNC_OVERLAP_MINUTES=15
-SEH_POWER_TIME_UNIT=QUARTER_OF_AN_HOUR
+SEH_POWER_TIME_UNIT=QUARTER_HOUR
 
 # Error handling
 SEH_ERROR_HANDLING=lenient  # strict, lenient, skip
@@ -218,7 +223,7 @@ SEH_NOTIFY_ON_SUCCESS=false
 ## What's Implemented
 
 - [x] Multi-database support (SQLite, PostgreSQL, MariaDB)
-- [x] Async API client with rate limiting (3 concurrent, 300/day)
+- [x] Async API V2 client with OAuth2 and rate limiting (10/min, 2000 credits/month)
 - [x] All 15 database tables with ORM models
 - [x] 8 database views for common queries
 - [x] Repository pattern with upsert support (ON CONFLICT / ON DUPLICATE KEY)
@@ -234,7 +239,8 @@ SEH_NOTIFY_ON_SUCCESS=false
 - [x] Site filtering (--sites flag)
 - [x] Diagnostics (--diagnostics flag)
 - [x] Configurable error handling
-- [x] 81+ unit and integration tests
+- [x] SolarEdge API V2 with OAuth (`seh auth`), migration guide in docs/MIGRATING_TO_API_V2.md
+- [x] 230+ unit and integration tests
 
 ## What's NOT Implemented (TODO)
 
@@ -245,10 +251,13 @@ SEH_NOTIFY_ON_SUCCESS=false
 
 ## Reference Resources
 
-- [SolarEdge Monitoring API Documentation](https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf)
-- [solaredge-interface](https://github.com/ndejong/solaredge-interface) - Python reference
-- [solaredge-go](https://github.com/elliott-davis/solaredge-go) - Go reference
-- [solaredgeoptimizers](https://github.com/ProudElm/solaredgeoptimizers) - Optimizer data
+- [SolarEdge API V2 documentation](https://api-docs.solaredge.com/) and
+  [developer platform](https://developer.solaredge.com/)
+- docs/V2_MIGRATION_HANDOFF.md - verified V2 behaviour, limits, deployment state
+- docs/MIGRATING_TO_API_V2.md - user upgrade guide
+- [ha_int_solaredge](https://github.com/trooperthorn/ha_int_solaredge) - community V2 client (reference)
+- V1-era references (historical): [V1 API PDF](https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf),
+  [solaredge-interface](https://github.com/ndejong/solaredge-interface)
 
 ## Code Style
 
