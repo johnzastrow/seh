@@ -16,7 +16,6 @@ import asyncio
 import contextlib
 import json
 import os
-import sys
 import tempfile
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -26,6 +25,7 @@ import httpx
 import structlog
 from pydantic import BaseModel, ConfigDict, SecretStr, ValidationError
 
+from seh.utils import filelock
 from seh.utils.exceptions import APIError, AuthenticationError
 
 if TYPE_CHECKING:
@@ -174,37 +174,10 @@ class TokenStore:
     # Cross-process lock: blocking, so callers run it in a worker thread.
 
     def acquire_lock(self) -> int:
-        self.lock_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd = os.open(self.lock_path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            if sys.platform == "win32":
-                import msvcrt
-
-                os.lseek(fd, 0, os.SEEK_SET)
-                # LK_LOCK retries for about 10 seconds before raising OSError.
-                msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(fd, fcntl.LOCK_EX)
-        except BaseException:
-            os.close(fd)
-            raise
-        return fd
+        return filelock.acquire(self.lock_path)
 
     def release_lock(self, fd: int) -> None:
-        try:
-            if sys.platform == "win32":
-                import msvcrt
-
-                os.lseek(fd, 0, os.SEEK_SET)
-                msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(fd, fcntl.LOCK_UN)
-        finally:
-            os.close(fd)
+        filelock.release(fd)
 
 
 class OAuthTokenManager:

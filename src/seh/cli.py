@@ -1084,7 +1084,15 @@ def status(ctx: click.Context, diagnostics: bool, sites_str: str | None) -> None
         # API configuration
         console.print(f"\n  API Base URL: {settings.api_base_url}")
         console.print(f"  Max Concurrent: {settings.api_max_concurrent}")
-        console.print(f"  Daily Limit: {settings.api_daily_limit}")
+        console.print(f"  Rate Limit: {settings.api_per_minute_limit} calls/minute")
+        console.print(f"  Monthly Credit Budget: {settings.api_monthly_credits}")
+        try:
+            from seh.api.rate_limiter import CreditLedger
+
+            month, used = CreditLedger(settings.usage_path, settings.api_monthly_credits).usage()
+            console.print(f"  Credits Used ({month}): {used}")
+        except OSError as e:
+            console.print(f"  Credits Used: unavailable ({e})")
         console.print(f"  Request Timeout: {settings.api_timeout}s")
 
         # Sync configuration

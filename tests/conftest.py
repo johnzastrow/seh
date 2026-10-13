@@ -13,6 +13,13 @@ from seh.db.base import Base
 from seh.db.engine import get_session
 
 
+@pytest.fixture(autouse=True)
+def isolated_state_files(tmp_path, monkeypatch):
+    """Keep tests away from the real token file and API credit ledger in ~/.config/seh."""
+    monkeypatch.setenv("SEH_TOKEN_FILE", str(tmp_path / "state" / "tokens.json"))
+    monkeypatch.setenv("SEH_USAGE_FILE", str(tmp_path / "state" / "usage.json"))
+
+
 @pytest.fixture
 def test_settings(tmp_path) -> Settings:
     """Create test settings with in-memory SQLite."""
@@ -166,6 +173,7 @@ def mock_api_client():
 
     # Mock alerts (forbidden)
     from seh.utils.exceptions import APIError
+
     client.get_alerts.side_effect = APIError("Forbidden", status_code=403)
 
     # Mock meters (not available)

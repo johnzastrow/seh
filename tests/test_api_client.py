@@ -14,7 +14,6 @@ from seh.api.client import (
     parse_timestamp,
     split_windows,
 )
-from seh.api.rate_limiter import RateLimiter
 from seh.config.settings import Settings
 from seh.utils.exceptions import APIError, AuthenticationError, ConfigurationError, RateLimitError
 
@@ -198,12 +197,49 @@ class TestRequest:
             assert (await client.get_site(111))["siteId"] == 111
         assert len(api.requests) == 3
 
-    async def test_429_raises_rate_limit_error_with_retry_after(self, settings):
-        api = Api(httpx.Response(429, headers={"retry-after": "42"}, json={"title": "Too Many"}))
+    async def test_429_waits_for_retry_after_then_succeeds(self, settings, monkeypatch):
+        waits = []
+
+        async def fake_sleep(seconds):
+            waits.append(seconds)
+
+        monkeypatch.setattr(client_module.asyncio, "sleep", fake_sleep)
+        api = Api(httpx.Response(429, headers={"retry-after": "42"}, json={}), {"siteId": 111})
+        async with make_client(settings, api) as client:
+            assert (await client.get_site(111))["siteId"] == 111
+        assert waits == [42.0]
+        assert len(api.requests) == 2
+
+    async def test_429_gives_up_after_repeated_limits(self, settings):
+        api = Api(httpx.Response(429, headers={"retry-after": "5"}, json={"title": "Too Many"}))
         async with make_client(settings, api) as client:
             with pytest.raises(RateLimitError) as exc_info:
                 await client.get_site(111)
-        assert exc_info.value.retry_after == 42.0
+        assert exc_info.value.retry_after == 5.0
+        assert len(api.requests) == 3  # first try + 2 retries
+
+    @pytest.mark.parametrize("headers", [{}, {"retry-after": "600"}])
+    async def test_429_without_short_retry_after_raises_immediately(self, settings, headers):
+        api = Api(httpx.Response(429, headers=headers, json={"title": "Too Many"}))
+        async with make_client(settings, api) as client:
+            with pytest.raises(RateLimitError):
+                await client.get_site(111)
+        assert len(api.requests) == 1
+
+    async def test_each_request_is_charged_to_the_credit_ledger(self, settings):
+        api = Api(httpx.Response(401, json={}), {"siteId": 111})
+        async with make_client(settings, api) as client:
+            await client.get_site(111)
+            _month, used = client.credits_used()
+        assert used == 2  # the rejected attempt was sent, so it counts
+
+    async def test_exhausted_budget_blocks_requests_before_sending(self, settings):
+        settings.api_monthly_credits = 1
+        api = Api({"siteId": 111})
+        async with make_client(settings, api) as client:
+            await client.get_site(111)
+            with pytest.raises(RateLimitError, match="credit budget"):
+                await client.get_site(111)
         assert len(api.requests) == 1
 
     async def test_bad_request_detail_is_reported(self, settings):
@@ -317,38 +353,3 @@ class TestEndpoints:
             "/v2/sites/111/power-flow",
             "/v2/sites/111/environmental-benefits",
         ]
-
-
-class TestRateLimiter:
-    """Test RateLimiter."""
-
-    def test_rate_limiter_initialization(self):
-        """Test rate limiter initializes correctly."""
-        limiter = RateLimiter(max_concurrent=3, daily_limit=300)
-        assert limiter.remaining_requests == 300
-        assert limiter.requests_today == 0
-
-    async def test_rate_limiter_tracks_requests(self):
-        """Test rate limiter tracks request count."""
-        limiter = RateLimiter(max_concurrent=3, daily_limit=300)
-
-        async with limiter:
-            pass
-
-        assert limiter.requests_today == 1
-        assert limiter.remaining_requests == 299
-
-    async def test_rate_limiter_daily_limit(self):
-        """Test rate limiter enforces daily limit."""
-        limiter = RateLimiter(max_concurrent=3, daily_limit=2)
-
-        # Use up the limit
-        async with limiter:
-            pass
-        async with limiter:
-            pass
-
-        # Next request should fail
-        with pytest.raises(RateLimitError, match="Daily API limit"):
-            async with limiter:
-                pass

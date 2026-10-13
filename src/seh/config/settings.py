@@ -32,7 +32,6 @@ class Settings(BaseSettings):
     )
     api_timeout: int = Field(default=10, description="API request timeout in seconds")
     api_max_concurrent: int = Field(default=3, description="Maximum concurrent API requests")
-    api_daily_limit: int = Field(default=300, description="Maximum API requests per day")
     api_monthly_credits: int = Field(
         default=2000,
         ge=1,
@@ -76,6 +75,11 @@ class Settings(BaseSettings):
         ge=1024,
         le=65535,
         description="Loopback port for the OAuth redirect (must match the registered redirect URI)",
+    )
+    usage_file: str = Field(
+        default="~/.config/seh/usage.json",
+        min_length=1,
+        description="Path of the monthly API credit ledger shared by all seh processes",
     )
     token_file: str = Field(
         default="~/.config/seh/tokens.json",
@@ -227,6 +231,11 @@ class Settings(BaseSettings):
     def oauth_redirect_uri(self) -> str:
         """Redirect URI registered with the SolarEdge developer application."""
         return f"http://{OAUTH_REDIRECT_HOST}:{self.oauth_redirect_port}/callback"
+
+    @property
+    def usage_path(self) -> Path:
+        """Credit ledger path with ~ expanded."""
+        return Path(self.usage_file).expanduser()
 
     @property
     def token_path(self) -> Path:

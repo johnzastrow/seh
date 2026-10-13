@@ -12,6 +12,7 @@ are ISO-8601 strings with the site's UTC offset, parsed with `parse_timestamp`.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, date, datetime, time, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -19,7 +20,7 @@ import httpx
 import structlog
 
 from seh.api.auth import OAuthTokenManager
-from seh.api.rate_limiter import RateLimiter
+from seh.api.rate_limiter import CreditLedger, RateLimiter
 from seh.utils.exceptions import APIError, AuthenticationError, RateLimitError
 from seh.utils.retry import retry_with_backoff
 
@@ -40,6 +41,9 @@ MAX_WINDOW: dict[str, timedelta] = {
 
 DEVICE_TYPES = ("INVERTER", "BATTERY", "METER", "OPTIMIZER")
 ALERTS_PAGE_SIZE = 100
+# On HTTP 429, wait for Retry-After (if this short) and retry, at most this many times.
+MAX_RATE_LIMIT_WAIT = 90.0
+MAX_RATE_LIMIT_RETRIES = 2
 MAX_ALERT_PAGES = 20
 
 Params = list[tuple[str, str]]
@@ -120,7 +124,8 @@ class SolarEdgeClient:
         self._transport = transport
         self._rate_limiter = RateLimiter(
             max_concurrent=settings.api_max_concurrent,
-            daily_limit=settings.api_daily_limit,
+            per_minute=settings.api_per_minute_limit,
+            ledger=CreditLedger(settings.usage_path, settings.api_monthly_credits),
         )
         self._client: httpx.AsyncClient | None = None
 
@@ -144,31 +149,34 @@ class SolarEdgeClient:
 
         Raises:
             AuthenticationError: If the stored sign-in is missing or rejected.
-            RateLimitError: On HTTP 429 (carries Retry-After when given).
+            RateLimitError: If the monthly credit budget is spent, or on HTTP 429 when
+                Retry-After is missing, too long, or keeps recurring.
             APIError: On any other failure (4xx errors are not retried).
         """
         if not self._client:
             raise APIError("Client not initialized. Use 'async with' context manager.")
 
-        url = f"{self._base_url}{path}"
         token = await self._auth.get_access_token()
-        async with self._rate_limiter:
-            for attempt in (1, 2):
-                logger.debug("API request", path=path)
-                try:
-                    response = await self._client.get(
-                        url,
-                        params=tuple(params or ()),
-                        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-                    )
-                except httpx.RequestError as e:
-                    logger.error("Request error", path=path, error=type(e).__name__)
-                    raise APIError(f"Request failed: {type(e).__name__}: {e}") from e
-
-                if response.status_code == 401 and attempt == 1:
-                    token = await self._auth.handle_unauthorized(token)
+        refreshed = False
+        rate_limit_retries = 0
+        while True:
+            response = await self._send(path, params, token)
+            if response.status_code == 401 and not refreshed:
+                token = await self._auth.handle_unauthorized(token)
+                refreshed = True
+                continue
+            if response.status_code == 429:
+                wait = _retry_after(response)
+                if (
+                    rate_limit_retries < MAX_RATE_LIMIT_RETRIES
+                    and wait is not None
+                    and wait <= MAX_RATE_LIMIT_WAIT
+                ):
+                    rate_limit_retries += 1
+                    logger.warning("SolarEdge rate limit hit; waiting", path=path, seconds=wait)
+                    await asyncio.sleep(wait)
                     continue
-                break
+            break
 
         if response.status_code == 401:
             raise AuthenticationError(
@@ -191,6 +199,29 @@ class SolarEdgeClient:
             return response.json()
         except ValueError as e:
             raise APIError(f"Invalid JSON from {path}") from e
+
+    async def _send(self, path: str, params: Params | None, token: str) -> httpx.Response:
+        """Send one GET inside the rate limiter (each send costs one API credit)."""
+        assert self._client is not None
+        async with self._rate_limiter:
+            logger.debug("API request", path=path)
+            try:
+                response = await self._client.get(
+                    f"{self._base_url}{path}",
+                    params=tuple(params or ()),
+                    headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                )
+            except httpx.RequestError as e:
+                logger.error("Request error", path=path, error=type(e).__name__)
+                raise APIError(f"Request failed: {type(e).__name__}: {e}") from e
+            self._rate_limiter.note_remaining_minute(
+                response.headers.get("x-ratelimit-remaining-minute")
+            )
+        return response
+
+    def credits_used(self) -> tuple[str, int] | None:
+        """(month, API credits used this month) from the shared ledger."""
+        return self._rate_limiter.credits_used()
 
     async def _series(
         self, path: str, start: TimePoint, end: TimePoint, resolution: str, unit: str
