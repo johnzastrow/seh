@@ -1,42 +1,133 @@
-"""SolarEdge API client."""
+"""SolarEdge Monitoring API V2 client.
 
-from datetime import date, datetime
-from typing import Any
+Authenticates with OAuth2 bearer tokens (see seh.api.auth), sends time ranges as UTC
+ISO-8601 instants, and splits long ranges into the largest windows SolarEdge accepts for
+each resolution (verified against the live API, 2026-10-12):
+
+    QUARTER_HOUR: 1 week    HOUR: 24 hours    DAY: 1 month
+
+Responses are returned as SolarEdge sends them (camelCase dicts); timestamps in responses
+are ISO-8601 strings with the site's UTC offset, parsed with `parse_timestamp`.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, date, datetime, time, timedelta
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
 
+from seh.api.auth import OAuthTokenManager
 from seh.api.rate_limiter import RateLimiter
-from seh.config.settings import Settings
-from seh.utils.exceptions import APIError
+from seh.utils.exceptions import APIError, AuthenticationError, RateLimitError
 from seh.utils.retry import retry_with_backoff
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from seh.config.settings import Settings
 
 logger = structlog.get_logger(__name__)
 
+# Largest window per request, by resolution. DAY is documented as "1 month"; 28 days stays
+# inside every calendar month.
+MAX_WINDOW: dict[str, timedelta] = {
+    "QUARTER_HOUR": timedelta(days=7),
+    "HOUR": timedelta(hours=24),
+    "DAY": timedelta(days=28),
+}
+
+DEVICE_TYPES = ("INVERTER", "BATTERY", "METER", "OPTIMIZER")
+ALERTS_PAGE_SIZE = 100
+MAX_ALERT_PAGES = 20
+
+Params = list[tuple[str, str]]
+TimePoint = date | datetime
+
+
+def format_instant(value: TimePoint) -> str:
+    """Format a time as a UTC instant ("2026-10-12T18:00:00Z").
+
+    Naive datetimes are taken as this machine's local time, and dates as local midnight;
+    seh runs in the site's timezone, as it did with V1.
+    """
+    return _as_aware(value).astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_timestamp(value: str) -> datetime:
+    """Parse a V2 response timestamp (ISO-8601 with offset) into an aware datetime."""
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def split_windows(
+    start: TimePoint, end: TimePoint, resolution: str
+) -> list[tuple[datetime, datetime]]:
+    """Split [start, end) into consecutive windows no longer than the resolution allows."""
+    start_dt = _as_aware(start)
+    end_dt = _as_aware(end)
+    if end_dt <= start_dt:
+        return []
+    step = MAX_WINDOW.get(resolution)
+    if step is None:
+        return [(start_dt, end_dt)]
+    windows = []
+    cursor = start_dt
+    while cursor < end_dt:
+        window_end = min(cursor + step, end_dt)
+        windows.append((cursor, window_end))
+        cursor = window_end
+    return windows
+
+
+def _as_aware(value: TimePoint) -> datetime:
+    if not isinstance(value, datetime):
+        value = datetime.combine(value, time.min)
+    return value if value.tzinfo is not None else value.astimezone()
+
+
+def _merge_values(target: dict[str, Any], values: list[Any]) -> None:
+    """Add series points keyed by timestamp; a later window wins at a shared boundary."""
+    for point in values:
+        if isinstance(point, dict) and isinstance(point.get("timestamp"), str):
+            target[point["timestamp"]] = point
+
+
+def _sorted_values(points: dict[str, Any]) -> list[dict[str, Any]]:
+    return [points[k] for k in sorted(points, key=parse_timestamp)]
+
 
 class SolarEdgeClient:
-    """Async client for the SolarEdge Monitoring API."""
+    """Async client for the SolarEdge Monitoring API V2."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        token_manager: OAuthTokenManager | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
         """Initialize the client.
 
         Args:
             settings: Application settings.
+            token_manager: OAuth token source (defaults to the configured token file).
+            transport: Optional httpx transport, for tests.
         """
         self._settings = settings
         self._base_url = settings.api_base_url.rstrip("/")
-        # Interim: V1 query-string key, replaced by OAuth bearer auth in the V2 client rewrite.
-        self._api_key = settings.api_key.get_secret_value() if settings.api_key else ""
         self._timeout = settings.api_timeout
+        self._auth = token_manager or OAuthTokenManager(settings)
+        self._transport = transport
         self._rate_limiter = RateLimiter(
             max_concurrent=settings.api_max_concurrent,
             daily_limit=settings.api_daily_limit,
         )
         self._client: httpx.AsyncClient | None = None
 
-    async def __aenter__(self) -> "SolarEdgeClient":
-        """Context manager entry."""
-        self._client = httpx.AsyncClient(timeout=self._timeout)
+    async def __aenter__(self) -> SolarEdgeClient:
+        """Context manager entry; fails fast if OAuth credentials are not configured."""
+        self._settings.require_oauth_credentials()
+        self._client = httpx.AsyncClient(timeout=self._timeout, transport=self._transport)
         return self
 
     async def __aexit__(self, *args: Any) -> None:
@@ -45,420 +136,223 @@ class SolarEdgeClient:
             await self._client.aclose()
             self._client = None
 
-    def _format_date(self, d: date | datetime | None) -> str | None:
-        """Format a date for the API.
-
-        Args:
-            d: Date to format.
-
-        Returns:
-            Formatted date string or None.
-        """
-        if d is None:
-            return None
-        if isinstance(d, datetime):
-            return d.strftime("%Y-%m-%d %H:%M:%S")
-        return d.strftime("%Y-%m-%d")
+    # --- transport -------------------------------------------------------------
 
     @retry_with_backoff(max_retries=3, base_delay=2.0)
-    async def _request(
-        self,
-        method: str,
-        path: str,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Make an API request.
-
-        Args:
-            method: HTTP method.
-            path: API path.
-            params: Query parameters.
-
-        Returns:
-            JSON response data.
+    async def _request(self, path: str, params: Params | None = None) -> Any:
+        """GET a V2 resource with bearer auth, refreshing the token once on HTTP 401.
 
         Raises:
-            APIError: If the request fails.
+            AuthenticationError: If the stored sign-in is missing or rejected.
+            RateLimitError: On HTTP 429 (carries Retry-After when given).
+            APIError: On any other failure (4xx errors are not retried).
         """
         if not self._client:
             raise APIError("Client not initialized. Use 'async with' context manager.")
 
         url = f"{self._base_url}{path}"
-        params = params or {}
-        params["api_key"] = self._api_key
-
+        token = await self._auth.get_access_token()
         async with self._rate_limiter:
-            logger.debug("API request", method=method, path=path)
+            for attempt in (1, 2):
+                logger.debug("API request", path=path)
+                try:
+                    response = await self._client.get(
+                        url,
+                        params=tuple(params or ()),
+                        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                    )
+                except httpx.RequestError as e:
+                    logger.error("Request error", path=path, error=type(e).__name__)
+                    raise APIError(f"Request failed: {type(e).__name__}: {e}") from e
 
-            try:
-                response = await self._client.request(method, url, params=params)
-                response.raise_for_status()
-                return response.json()
-            except httpx.HTTPStatusError as e:
-                logger.error(
-                    "API error",
-                    status_code=e.response.status_code,
-                    url=url,
-                    response=e.response.text[:500],
-                )
-                raise APIError(
-                    f"API request failed: {e.response.text[:200]}",
-                    status_code=e.response.status_code,
-                ) from e
-            except httpx.RequestError as e:
-                logger.error("Request error", url=url, error=str(e))
-                raise APIError(f"Request failed: {e}") from e
+                if response.status_code == 401 and attempt == 1:
+                    token = await self._auth.handle_unauthorized(token)
+                    continue
+                break
 
-    # Site endpoints
+        if response.status_code == 401:
+            raise AuthenticationError(
+                f"SolarEdge rejected the access token for {path} even after a refresh. "
+                "Run 'seh auth login' to sign in again."
+            )
+        if response.status_code == 429:
+            raise RateLimitError(
+                f"SolarEdge rate limit reached on {path}: {_problem_detail(response)}",
+                retry_after=_retry_after(response),
+            )
+        if response.status_code >= 400:
+            detail = _problem_detail(response)
+            logger.error("API error", status_code=response.status_code, path=path, detail=detail)
+            raise APIError(
+                f"API request failed (HTTP {response.status_code}) for {path}: {detail}",
+                status_code=response.status_code,
+            )
+        try:
+            return response.json()
+        except ValueError as e:
+            raise APIError(f"Invalid JSON from {path}") from e
+
+    async def _series(
+        self, path: str, start: TimePoint, end: TimePoint, resolution: str, unit: str
+    ) -> list[dict[str, Any]]:
+        """Fetch a {values: [...]} series across as many windows as needed."""
+        points: dict[str, Any] = {}
+        for window_start, window_end in split_windows(start, end, resolution):
+            data = await self._request(
+                path,
+                [
+                    ("resolution", resolution),
+                    ("unit", unit),
+                    ("from", format_instant(window_start)),
+                    ("to", format_instant(window_end)),
+                ],
+            )
+            if isinstance(data, dict):
+                _merge_values(points, data.get("values") or [])
+        return _sorted_values(points)
+
+    async def _telemetry(
+        self, path: str, key: str, start: TimePoint, end: TimePoint, resolution: str
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """Fetch per-device telemetry across windows.
+
+        Returns {serial: {metric: {"unit": str | None, "values": [{timestamp, value}]}}}.
+        """
+        merged: dict[str, dict[str, dict[str, Any]]] = {}
+        for window_start, window_end in split_windows(start, end, resolution):
+            data = await self._request(
+                path,
+                [
+                    ("resolution", resolution),
+                    ("from", format_instant(window_start)),
+                    ("to", format_instant(window_end)),
+                ],
+            )
+            devices = data.get(key) if isinstance(data, dict) else None
+            if not isinstance(devices, dict):
+                continue
+            for serial, metrics in devices.items():
+                if not isinstance(metrics, dict):
+                    continue
+                device = merged.setdefault(serial, {})
+                for metric, series in metrics.items():
+                    if not isinstance(series, dict):
+                        continue
+                    entry = device.setdefault(metric, {"unit": series.get("unit"), "points": {}})
+                    _merge_values(entry["points"], series.get("values") or [])
+        return {
+            serial: {
+                metric: {"unit": entry["unit"], "values": _sorted_values(entry["points"])}
+                for metric, entry in metrics.items()
+            }
+            for serial, metrics in merged.items()
+        }
+
+    # --- sites -----------------------------------------------------------------
 
     async def get_sites(self) -> list[dict[str, Any]]:
-        """Get list of sites for the account.
+        """Get the configured sites (OAuth Site Access cannot list sites; see SEH_SITE_IDS)."""
+        return [await self.get_site(site_id) for site_id in self._settings.require_site_ids()]
 
-        Returns:
-            List of site data dictionaries.
-        """
-        data = await self._request("GET", "/sites/list")
-        sites = data.get("sites", {}).get("site", [])
-        # Ensure it's a list (single site returns dict)
-        if isinstance(sites, dict):
-            sites = [sites]
-        return sites
+    async def get_site(self, site_id: int) -> dict[str, Any]:
+        """GET /sites/{id}: name, peak power, location (with timezone), activation status."""
+        data = await self._request(f"/sites/{site_id}")
+        return data if isinstance(data, dict) else {}
 
-    async def get_site_details(self, site_id: int) -> dict[str, Any]:
-        """Get detailed information for a site.
+    async def get_overview(self, site_id: int) -> dict[str, Any]:
+        """GET /sites/{id}/overview: today's production and consumption breakdown (Wh)."""
+        data = await self._request(f"/sites/{site_id}/overview")
+        return data if isinstance(data, dict) else {}
 
-        Args:
-            site_id: Site ID.
-
-        Returns:
-            Site details dictionary.
-        """
-        data = await self._request("GET", f"/site/{site_id}/details")
-        return data.get("details", {})
-
-    # Equipment endpoints
-
-    async def get_equipment(self, site_id: int) -> list[dict[str, Any]]:
-        """Get list of equipment at a site.
-
-        Args:
-            site_id: Site ID.
-
-        Returns:
-            List of equipment (inverters).
-        """
-        data = await self._request("GET", f"/equipment/{site_id}/list")
-        reporters = data.get("reporters", {}).get("list", [])
-        if isinstance(reporters, dict):
-            reporters = [reporters]
-        return reporters
-
-    async def get_inverter_data(
-        self,
-        site_id: int,
-        serial_number: str,
-        start_time: datetime,
-        end_time: datetime,
+    async def get_devices(
+        self, site_id: int, types: Sequence[str] = DEVICE_TYPES
     ) -> list[dict[str, Any]]:
-        """Get inverter telemetry data.
-
-        Args:
-            site_id: Site ID.
-            serial_number: Inverter serial number.
-            start_time: Start time.
-            end_time: End time.
-
-        Returns:
-            List of telemetry readings.
-        """
-        data = await self._request(
-            "GET",
-            f"/equipment/{site_id}/{serial_number}/data",
-            params={
-                "startTime": self._format_date(start_time),
-                "endTime": self._format_date(end_time),
-            },
-        )
-        return data.get("data", {}).get("telemetries", [])
-
-    async def get_optimizer_data(
-        self,
-        site_id: int,
-        serial_number: str,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """Get optimizer telemetry data.
-
-        Args:
-            site_id: Site ID.
-            serial_number: Optimizer serial number.
-            start_time: Start time.
-            end_time: End time.
-
-        Returns:
-            List of telemetry readings.
-        """
-        data = await self._request(
-            "GET",
-            f"/equipment/{site_id}/{serial_number}/data",
-            params={
-                "startTime": self._format_date(start_time),
-                "endTime": self._format_date(end_time),
-            },
-        )
-        return data.get("data", {}).get("telemetries", [])
-
-    # Energy endpoints
-
-    async def get_energy(
-        self,
-        site_id: int,
-        start_date: date,
-        end_date: date,
-        time_unit: str = "DAY",
-    ) -> list[dict[str, Any]]:
-        """Get energy production data.
-
-        Args:
-            site_id: Site ID.
-            start_date: Start date.
-            end_date: End date.
-            time_unit: Time unit (DAY, WEEK, MONTH, YEAR).
-
-        Returns:
-            List of energy values.
-        """
-        data = await self._request(
-            "GET",
-            f"/site/{site_id}/energy",
-            params={
-                "startDate": self._format_date(start_date),
-                "endDate": self._format_date(end_date),
-                "timeUnit": time_unit,
-            },
-        )
-        return data.get("energy", {}).get("values", [])
-
-    async def get_energy_details(
-        self,
-        site_id: int,
-        start_time: datetime,
-        end_time: datetime,
-        time_unit: str = "QUARTER_OF_AN_HOUR",
-    ) -> dict[str, Any]:
-        """Get detailed energy data.
-
-        Args:
-            site_id: Site ID.
-            start_time: Start time.
-            end_time: End time.
-            time_unit: Time unit (QUARTER_OF_AN_HOUR, HOUR, DAY, WEEK, MONTH, YEAR).
-
-        Returns:
-            Energy details dictionary.
-        """
-        data = await self._request(
-            "GET",
-            f"/site/{site_id}/energyDetails",
-            params={
-                "startTime": self._format_date(start_time),
-                "endTime": self._format_date(end_time),
-                "timeUnit": time_unit,
-            },
-        )
-        return data.get("energyDetails", {})
-
-    # Power endpoints
-
-    async def get_power(
-        self,
-        site_id: int,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """Get power production data.
-
-        Args:
-            site_id: Site ID.
-            start_time: Start time.
-            end_time: End time.
-
-        Returns:
-            List of power values.
-        """
-        data = await self._request(
-            "GET",
-            f"/site/{site_id}/power",
-            params={
-                "startTime": self._format_date(start_time),
-                "endTime": self._format_date(end_time),
-            },
-        )
-        return data.get("power", {}).get("values", [])
-
-    async def get_power_details(
-        self,
-        site_id: int,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> dict[str, Any]:
-        """Get detailed power data.
-
-        Args:
-            site_id: Site ID.
-            start_time: Start time.
-            end_time: End time.
-
-        Returns:
-            Power details dictionary.
-        """
-        data = await self._request(
-            "GET",
-            f"/site/{site_id}/powerDetails",
-            params={
-                "startTime": self._format_date(start_time),
-                "endTime": self._format_date(end_time),
-            },
-        )
-        return data.get("powerDetails", {})
-
-    async def get_power_flow(self, site_id: int) -> dict[str, Any]:
-        """Get current power flow.
-
-        Args:
-            site_id: Site ID.
-
-        Returns:
-            Power flow dictionary.
-        """
-        data = await self._request("GET", f"/site/{site_id}/currentPowerFlow")
-        return data.get("siteCurrentPowerFlow", {})
-
-    # Storage endpoints
-
-    async def get_storage_data(
-        self,
-        site_id: int,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> dict[str, Any]:
-        """Get storage (battery) data.
-
-        Args:
-            site_id: Site ID.
-            start_time: Start time.
-            end_time: End time.
-
-        Returns:
-            Storage data dictionary.
-        """
-        data = await self._request(
-            "GET",
-            f"/site/{site_id}/storageData",
-            params={
-                "startTime": self._format_date(start_time),
-                "endTime": self._format_date(end_time),
-            },
-        )
-        return data.get("storageData", {})
-
-    # Meter endpoints
-
-    async def get_meters(self, site_id: int) -> list[dict[str, Any]]:
-        """Get list of meters at a site.
-
-        Args:
-            site_id: Site ID.
-
-        Returns:
-            List of meter info.
-        """
-        data = await self._request("GET", f"/site/{site_id}/meters")
-        meters = data.get("metersList", {}).get("meters", [])
-        if isinstance(meters, dict):
-            meters = [meters]
-        return meters
-
-    async def get_meter_data(
-        self,
-        site_id: int,
-        start_time: datetime,
-        end_time: datetime,
-    ) -> dict[str, Any]:
-        """Get meter readings.
-
-        Args:
-            site_id: Site ID.
-            start_time: Start time.
-            end_time: End time.
-
-        Returns:
-            Meter data dictionary.
-        """
-        data = await self._request(
-            "GET",
-            f"/site/{site_id}/meters",
-            params={
-                "startTime": self._format_date(start_time),
-                "endTime": self._format_date(end_time),
-            },
-        )
-        return data.get("meterEnergyDetails", {})
-
-    # Environmental benefits endpoints
+        """GET /sites/{id}/devices for the given device types (inverters only if none given)."""
+        data = await self._request(f"/sites/{site_id}/devices", [("types", t) for t in types])
+        return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
 
     async def get_environmental_benefits(self, site_id: int) -> dict[str, Any]:
-        """Get environmental benefits data for a site.
-
-        Args:
-            site_id: Site ID.
-
-        Returns:
-            Environmental benefits dictionary with CO2 saved, trees planted, etc.
-        """
-        data = await self._request("GET", f"/site/{site_id}/envBenefits")
-        return data.get("envBenefits", {})
-
-    # Alert endpoints
+        """GET /sites/{id}/environmental-benefits: co2Emissions, evMiles, unit."""
+        data = await self._request(f"/sites/{site_id}/environmental-benefits")
+        return data if isinstance(data, dict) else {}
 
     async def get_alerts(self, site_id: int) -> list[dict[str, Any]]:
-        """Get alerts for a site.
-
-        Args:
-            site_id: Site ID.
-
-        Returns:
-            List of alert dictionaries.
-        """
-        data = await self._request("GET", f"/site/{site_id}/alerts")
-        alerts = data.get("alerts", {}).get("alert", [])
-        if isinstance(alerts, dict):
-            alerts = [alerts]
+        """GET /sites/{id}/alerts, all pages."""
+        alerts: list[dict[str, Any]] = []
+        for page in range(1, MAX_ALERT_PAGES + 1):
+            data = await self._request(
+                f"/sites/{site_id}/alerts",
+                [("page", str(page)), ("alerts-in-page", str(ALERTS_PAGE_SIZE))],
+            )
+            batch = [a for a in data if isinstance(a, dict)] if isinstance(data, list) else []
+            alerts.extend(batch)
+            if len(batch) < ALERTS_PAGE_SIZE:
+                break
         return alerts
 
-    # Inventory endpoints
+    # --- energy and power ------------------------------------------------------
 
-    async def get_inventory(self, site_id: int) -> dict[str, Any]:
-        """Get inventory for a site.
+    async def get_energy(
+        self, site_id: int, start: TimePoint, end: TimePoint, resolution: str = "DAY"
+    ) -> list[dict[str, Any]]:
+        """Energy in Wh per interval: [{"timestamp", "value"}]. Values may be None."""
+        return await self._series(f"/sites/{site_id}/energy", start, end, resolution, "WH")
 
-        Args:
-            site_id: Site ID.
+    async def get_power(
+        self, site_id: int, start: TimePoint, end: TimePoint, resolution: str = "QUARTER_HOUR"
+    ) -> list[dict[str, Any]]:
+        """Average power in W per interval: [{"timestamp", "value"}]. Values may be None."""
+        return await self._series(f"/sites/{site_id}/power", start, end, resolution, "W")
 
-        Returns:
-            Inventory dictionary with inverters, optimizers, etc.
-        """
-        data = await self._request("GET", f"/site/{site_id}/inventory")
-        return data.get("Inventory", {})
+    async def get_power_flow(self, site_id: int) -> dict[str, Any]:
+        """GET /sites/{id}/power-flow: current pv/load/grid/storage snapshot (kW)."""
+        data = await self._request(f"/sites/{site_id}/power-flow")
+        return data if isinstance(data, dict) else {}
 
-    # Utility methods
+    # --- telemetry -------------------------------------------------------------
 
-    @property
-    def remaining_requests(self) -> int:
-        """Get remaining API requests for today."""
-        return self._rate_limiter.remaining_requests
+    async def get_meters_telemetry(
+        self, site_id: int, start: TimePoint, end: TimePoint, resolution: str = "QUARTER_HOUR"
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """Per-meter production/import/export power (W) and energy (Wh)."""
+        return await self._telemetry(
+            f"/sites/{site_id}/meters/telemetry", "meters", start, end, resolution
+        )
 
-    @property
-    def requests_today(self) -> int:
-        """Get number of requests made today."""
-        return self._rate_limiter.requests_today
+    async def get_inverters_telemetry(
+        self, site_id: int, start: TimePoint, end: TimePoint, resolution: str = "QUARTER_HOUR"
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """Per-inverter power, energy, consumedAcPower/Energy, voltage, current, frequency."""
+        return await self._telemetry(
+            f"/sites/{site_id}/inverters/telemetry", "inverters", start, end, resolution
+        )
+
+    async def get_storage_telemetry(
+        self, site_id: int, start: TimePoint, end: TimePoint, resolution: str = "QUARTER_HOUR"
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """Per-battery telemetry; empty when the site has no battery."""
+        return await self._telemetry(
+            f"/sites/{site_id}/storage/telemetry", "storage", start, end, resolution
+        )
+
+
+def _problem_detail(response: httpx.Response) -> str:
+    """Short description from an RFC 7807 problem response (never includes request auth)."""
+    try:
+        data = response.json()
+    except ValueError:
+        return response.reason_phrase or "error"
+    if isinstance(data, dict):
+        for key in ("detail", "title", "message", "error"):
+            value = data.get(key)
+            if isinstance(value, str) and value:
+                return value[:300]
+    return response.reason_phrase or "error"
+
+
+def _retry_after(response: httpx.Response) -> float | None:
+    value = response.headers.get("retry-after")
+    try:
+        return float(value) if value is not None else None
+    except ValueError:
+        return None

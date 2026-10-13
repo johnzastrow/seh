@@ -36,8 +36,11 @@ class AuthenticationError(SEHError):
 class RateLimitError(APIError):
     """API rate limit exceeded."""
 
-    def __init__(self, message: str = "API rate limit exceeded") -> None:
+    def __init__(
+        self, message: str = "API rate limit exceeded", retry_after: float | None = None
+    ) -> None:
         super().__init__(message, status_code=429)
+        self.retry_after = retry_after
 
 
 class DatabaseError(SEHError):
