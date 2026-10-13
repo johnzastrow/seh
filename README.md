@@ -626,6 +626,8 @@ and troubleshooting, is in **[docs/MIGRATING_TO_API_V2.md](docs/MIGRATING_TO_API
 - Incremental syncs resume from the newest stored reading, fixing partial last intervals left by V1
 - Endpoints a plan does not include (HTTP 400/403/404) are recorded as skipped
 - Removed `SEH_API_KEY` and `SEH_API_DAILY_LIMIT`
+- Security: `seh export dump` no longer passes the database password on the command line (uses a temporary
+  owner-only credentials file), never prints it in errors, and writes the dump file owner-only (0600)
 - Fixed: the global `-c/--config` option now loads the given `.env` file (it was silently ignored); `check-api --update-config` writes to that file
 
 ### v0.2.0 (2026-03-13)

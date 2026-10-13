@@ -49,8 +49,9 @@ Only legitimate short days remain: 2026-01-27 (system commissioned mid-afternoon
 3. **`.env.example`** still documents `SEH_API_KEY`. The agent is denied access to `.env*` files, so the
    owner must update it (OAuth lines are in the README "Upgrading from v0.2" section).
 4. Follow-ups (not urgent):
-   - `seh export dump` passes the MariaDB password on the `mysqldump` command line (visible in the
-     process list); use `MYSQL_PWD` / `PGPASSWORD` in the environment instead.
+   - ~~`seh export dump` passes the MariaDB password on the command line~~ Fixed: credentials go
+     through a temporary 0600 option file (MariaDB) or PGPASSFILE (PostgreSQL); dump file is 0600.
+   - ~~`seh -c` ignored~~ Fixed: `-c` loads the given `.env`.
    - DST fall-back (2026-11-01): timestamps are naive local time, so 01:00-01:45 occurs twice and the
      second hour overwrites the first (same as V1). Fixing needs a schema change (UTC or offset column).
    - V2 alert and storage (battery) schemas are unverified (no alerts, no battery on this site);

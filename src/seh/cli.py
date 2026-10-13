@@ -18,7 +18,6 @@ import asyncio
 import csv
 import json
 import os
-import subprocess
 from datetime import date, datetime
 
 import click
@@ -1598,88 +1597,28 @@ EXAMPLES:
   seh export dump -o backup.sql       # Specific filename
 
 NOTE: For large databases, this may take some time and
-produce large files.
+produce large files. The dump file is created readable only by you,
+and the database password is never put on the command line.
 """)
 @click.option("--output", "-o", type=click.Path(), help="Output file path.")
 @click.pass_context
 def export_dump(ctx: click.Context, output: str | None) -> None:
     """Export database to SQL dump."""
+    from seh.db.dump import DumpError, dump_database
+
     settings = load_settings(ctx.obj.get("config_path"))
 
     if output is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output = f"seh_dump_{timestamp}.sql"
 
-    db_url = settings.database_url
-
     try:
-        if "sqlite" in db_url:
-            # SQLite dump
-            db_path = db_url.replace("sqlite:///", "")
-            result = subprocess.run(
-                ["sqlite3", db_path, ".dump"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            with open(output, "w") as f:
-                f.write(result.stdout)
-
-        elif "postgresql" in db_url:
-            # PostgreSQL dump using pg_dump
-            # Extract connection info from URL
-            # Format: postgresql+psycopg://user:pass@host:port/db
-            import urllib.parse
-            parsed = urllib.parse.urlparse(db_url.replace("+psycopg", ""))
-
-            env = os.environ.copy()
-            if parsed.password:
-                env["PGPASSWORD"] = parsed.password
-
-            cmd = ["pg_dump"]
-            if parsed.hostname:
-                cmd.extend(["-h", parsed.hostname])
-            if parsed.port:
-                cmd.extend(["-p", str(parsed.port)])
-            if parsed.username:
-                cmd.extend(["-U", parsed.username])
-            cmd.extend(["-f", output, parsed.path.lstrip("/")])
-
-            subprocess.run(cmd, env=env, check=True)
-
-        elif "mariadb" in db_url or "mysql" in db_url:
-            # MariaDB/MySQL dump using mysqldump
-            import urllib.parse
-            parsed = urllib.parse.urlparse(db_url.replace("+mariadbconnector", "").replace("+pymysql", ""))
-
-            cmd = ["mysqldump"]
-            if parsed.hostname:
-                cmd.extend(["-h", parsed.hostname])
-            if parsed.port:
-                cmd.extend(["-P", str(parsed.port)])
-            if parsed.username:
-                cmd.extend(["-u", parsed.username])
-            if parsed.password:
-                cmd.append(f"-p{parsed.password}")
-            cmd.append(parsed.path.lstrip("/"))
-
-            with open(output, "w") as f:
-                subprocess.run(cmd, stdout=f, check=True)
-
-        else:
-            console.print(f"[red]Unsupported database type for dump: {db_url}[/red]")
-            raise SystemExit(1)
-
-        console.print(f"[green]Database exported to {output}[/green]")
-
-    except subprocess.CalledProcessError as e:
+        dump_database(settings.database_url, output)
+    except DumpError as e:
         console.print(f"[red]Dump failed:[/red] {e}")
         raise SystemExit(1) from None
-    except FileNotFoundError as e:
-        console.print(f"[red]Dump tool not found:[/red] {e}")
-        console.print("[yellow]Ensure sqlite3/pg_dump/mysqldump is installed and in PATH[/yellow]")
-        raise SystemExit(1) from None
 
+    console.print(f"[green]Database exported to {output}[/green] (readable only by you)")
 
 if __name__ == "__main__":
     cli()
