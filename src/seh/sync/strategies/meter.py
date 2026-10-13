@@ -97,10 +97,12 @@ class MeterSyncStrategy(BaseSyncStrategy):
             if not meter_readings:
                 # Try alternate structure
                 for meter_name in meter_data.get("meterSerialNumber", {}):
-                    meter_readings.append({
-                        "name": meter_name,
-                        "values": meter_data.get("meterSerialNumber", {}).get(meter_name, []),
-                    })
+                    meter_readings.append(
+                        {
+                            "name": meter_name,
+                            "values": meter_data.get("meterSerialNumber", {}).get(meter_name, []),
+                        }
+                    )
 
             for meter_info in meter_readings:
                 meter_name = meter_info.get("name", meter_info.get("meterSerialNumber"))

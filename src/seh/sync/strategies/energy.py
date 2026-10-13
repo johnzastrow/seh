@@ -70,12 +70,14 @@ class EnergySyncStrategy(BaseSyncStrategy):
                 if energy_wh is None:
                     continue
 
-                readings.append({
-                    "site_id": site_id,
-                    "reading_date": reading_date,
-                    "time_unit": "DAY",
-                    "energy_wh": energy_wh,
-                })
+                readings.append(
+                    {
+                        "site_id": site_id,
+                        "reading_date": reading_date,
+                        "time_unit": "DAY",
+                        "energy_wh": energy_wh,
+                    }
+                )
 
                 if latest_date is None or reading_date > latest_date:
                     latest_date = reading_date
@@ -83,7 +85,9 @@ class EnergySyncStrategy(BaseSyncStrategy):
             # Upsert all readings
             count = repo.upsert_batch(readings)
 
-            last_timestamp = datetime.combine(latest_date, datetime.min.time()) if latest_date else None
+            last_timestamp = (
+                datetime.combine(latest_date, datetime.min.time()) if latest_date else None
+            )
             self.update_sync_metadata(site_id, last_timestamp, count)
             logger.info("Energy sync complete", site_id=site_id, count=count)
             return count

@@ -22,8 +22,13 @@ from seh.sync.strategies.power import PowerSyncStrategy
 from seh.sync.strategies.power_details import PowerDetailsSyncStrategy
 from seh.sync.strategies.site import SiteSyncStrategy
 from seh.sync.strategies.storage import StorageSyncStrategy
+from seh.utils.exceptions import AuthenticationError, ConfigurationError, RateLimitError
 
 logger = structlog.get_logger(__name__)
+
+# Errors that will repeat for every remaining request, so the whole sync stops at once:
+# a rejected sign-in, missing configuration, or an exhausted API credit budget.
+FATAL_ERRORS = (AuthenticationError, ConfigurationError, RateLimitError)
 
 
 @dataclass
@@ -82,11 +87,11 @@ class SyncOrchestrator:
         start_time = datetime.now()
         logger.info("Starting sync for all sites", full=full)
 
-        # Get list of sites from API
-        sites = await self.client.get_sites()
+        # V2 OAuth tokens cannot list sites, so the configured site IDs are the source.
+        site_ids = self.settings.require_site_ids()
 
-        if not sites:
-            logger.warning("No sites found for this API key")
+        if not site_ids:
+            logger.warning("No sites configured")
             return SyncSummary(
                 total_sites=0,
                 successful_sites=0,
@@ -98,17 +103,11 @@ class SyncOrchestrator:
 
         results: list[SyncResult] = []
 
-        for site in sites:
-            site_id = site.get("id")
-            site_name = site.get("name")
-
-            if not site_id:
-                continue
-
+        for site_id in site_ids:
             try:
-                result = await self.sync_site(site_id, full=full)
-                result.site_name = site_name
-                results.append(result)
+                results.append(await self.sync_site(site_id, full=full))
+            except FATAL_ERRORS:
+                raise
             except Exception as e:
                 # In strict mode, sync_site raises on first error
                 if self.settings.error_handling == "strict":
@@ -127,7 +126,7 @@ class SyncOrchestrator:
                 results.append(
                     SyncResult(
                         site_id=site_id,
-                        site_name=site_name,
+                        site_name=self._site_name(site_id),
                         success=False,
                         records_synced={},
                         errors={"sync": str(e)},
@@ -205,6 +204,14 @@ class SyncOrchestrator:
                 try:
                     count = await strategy.sync(site_id, full=full)
                     records_synced[strategy.data_type] = count
+                except FATAL_ERRORS as e:
+                    logger.error(
+                        "Sync stopped",
+                        site_id=site_id,
+                        data_type=strategy.data_type,
+                        error=str(e),
+                    )
+                    raise
                 except Exception as e:
                     error_mode = self.settings.error_handling
 
@@ -236,12 +243,18 @@ class SyncOrchestrator:
 
         return SyncResult(
             site_id=site_id,
-            site_name=None,
+            site_name=self._site_name(site_id),
             success=len(errors) == 0,
             records_synced=records_synced,
             errors=errors,
             duration_seconds=duration,
         )
+
+    def _site_name(self, site_id: int) -> str | None:
+        """Site name from the database (written by the site strategy)."""
+        with get_session(self.engine) as session:
+            site = SiteRepository(session).get_by_id(site_id)
+            return site.name if site else None
 
     async def get_sites(self) -> list[dict]:
         """Get list of sites from API.

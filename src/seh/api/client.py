@@ -128,6 +128,7 @@ class SolarEdgeClient:
             ledger=CreditLedger(settings.usage_path, settings.api_monthly_credits),
         )
         self._client: httpx.AsyncClient | None = None
+        self._devices_cache: dict[tuple[int, tuple[str, ...]], list[dict[str, Any]]] = {}
 
     async def __aenter__(self) -> SolarEdgeClient:
         """Context manager entry; fails fast if OAuth credentials are not configured."""
@@ -298,9 +299,18 @@ class SolarEdgeClient:
     async def get_devices(
         self, site_id: int, types: Sequence[str] = DEVICE_TYPES
     ) -> list[dict[str, Any]]:
-        """GET /sites/{id}/devices for the given device types (inverters only if none given)."""
-        data = await self._request(f"/sites/{site_id}/devices", [("types", t) for t in types])
-        return [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+        """GET /sites/{id}/devices for the given device types (inverters only if none given).
+
+        Cached for the life of the client, so the equipment and inventory strategies share
+        one API credit per sync.
+        """
+        key = (site_id, tuple(types))
+        if key not in self._devices_cache:
+            data = await self._request(f"/sites/{site_id}/devices", [("types", t) for t in types])
+            self._devices_cache[key] = (
+                [d for d in data if isinstance(d, dict)] if isinstance(data, list) else []
+            )
+        return [dict(d) for d in self._devices_cache[key]]
 
     async def get_environmental_benefits(self, site_id: int) -> dict[str, Any]:
         """GET /sites/{id}/environmental-benefits: co2Emissions, evMiles, unit."""

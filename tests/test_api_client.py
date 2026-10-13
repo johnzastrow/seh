@@ -333,6 +333,16 @@ class TestEndpoints:
         assert api.params()["types"] == ["INVERTER", "BATTERY", "METER", "OPTIMIZER"]
         assert devices == [{"type": "INVERTER", "serialNumber": "S1"}]
 
+    async def test_get_devices_is_cached_per_client(self, settings):
+        api = Api([{"type": "INVERTER", "serialNumber": "S1"}])
+        async with make_client(settings, api) as client:
+            first = await client.get_devices(111)
+            first[0]["name"] = "mutated by caller"
+            second = await client.get_devices(111)
+
+        assert len(api.requests) == 1  # equipment and inventory share one credit
+        assert "name" not in second[0]  # callers get copies
+
     async def test_get_alerts_follows_pages(self, settings):
         full_page = [{"alertId": i} for i in range(100)]
         api = Api(full_page, [{"alertId": 100}])

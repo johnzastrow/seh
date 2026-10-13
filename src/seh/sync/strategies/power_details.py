@@ -63,7 +63,9 @@ class PowerDetailsSyncStrategy(BaseSyncStrategy):
 
             while current_start < end_time:
                 chunk_end = min(current_start + timedelta(days=25), end_time)
-                chunk_count, chunk_latest = await self._sync_chunk(site_id, current_start, chunk_end)
+                chunk_count, chunk_latest = await self._sync_chunk(
+                    site_id, current_start, chunk_end
+                )
                 total_count += chunk_count
                 if chunk_latest and (latest_timestamp is None or chunk_latest > latest_timestamp):
                     latest_timestamp = chunk_latest

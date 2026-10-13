@@ -45,9 +45,7 @@ class PowerSyncStrategy(BaseSyncStrategy):
                 # Calculate chunk end (max 1 month)
                 chunk_end = min(current_start + timedelta(days=30), end_time)
 
-                chunk_count = await self._sync_chunk(
-                    site_id, current_start, chunk_end
-                )
+                chunk_count = await self._sync_chunk(site_id, current_start, chunk_end)
                 total_count += chunk_count
 
                 if chunk_count > 0:
@@ -113,11 +111,13 @@ class PowerSyncStrategy(BaseSyncStrategy):
             if power_watts is None:
                 continue
 
-            readings.append({
-                "site_id": site_id,
-                "timestamp": timestamp,
-                "power_watts": power_watts,
-            })
+            readings.append(
+                {
+                    "site_id": site_id,
+                    "timestamp": timestamp,
+                    "power_watts": power_watts,
+                }
+            )
 
         return repo.upsert_batch(readings)
 

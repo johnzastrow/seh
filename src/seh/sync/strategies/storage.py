@@ -82,8 +82,12 @@ class StorageSyncStrategy(BaseSyncStrategy):
                     db_data["last_power"] = latest_telemetry.get("power")
                     db_data["last_status"] = latest_telemetry.get("batteryState")
                     db_data["last_state_of_charge"] = latest_telemetry.get("batteryPercentageState")
-                    db_data["lifetime_energy_charged"] = latest_telemetry.get("lifeTimeEnergyCharged")
-                    db_data["lifetime_energy_discharged"] = latest_telemetry.get("lifeTimeEnergyDischarged")
+                    db_data["lifetime_energy_charged"] = latest_telemetry.get(
+                        "lifeTimeEnergyCharged"
+                    )
+                    db_data["lifetime_energy_discharged"] = latest_telemetry.get(
+                        "lifeTimeEnergyDischarged"
+                    )
                     db_data["capacity"] = latest_telemetry.get("fullPackEnergyAvailable")
 
                     ts_str = latest_telemetry.get("timeStamp")

@@ -68,9 +68,7 @@ class OptimizerTelemetrySyncStrategy(BaseSyncStrategy):
                         timestamp = None
                         if reading.get("date"):
                             with contextlib.suppress(ValueError, AttributeError):
-                                timestamp = datetime.strptime(
-                                    reading["date"], "%Y-%m-%d %H:%M:%S"
-                                )
+                                timestamp = datetime.strptime(reading["date"], "%Y-%m-%d %H:%M:%S")
 
                         if not timestamp:
                             continue
