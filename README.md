@@ -9,6 +9,10 @@
 
 Download your data from SolarEdge monitoring servers and store it in a relational database.
 
+> **v0.3.0 uses the SolarEdge Monitoring API V2.** SolarEdge retired the V1 API (static
+> API keys) on 2026-11-01. V2 requires a free developer app and a one-time OAuth
+> sign-in; see [Upgrading from v0.2](#upgrading-from-v02-api-v1).
+
 **See the outputs on [this page](https://northredoubt.com/weather/) near the bottom where it says "Residential Solar"**
 
 ## Features
@@ -16,7 +20,8 @@ Download your data from SolarEdge monitoring servers and store it in a relationa
 - **Multi-database support**: SQLite (default), PostgreSQL, and MariaDB
 - **Comprehensive data sync**: Sites, equipment, energy, power, batteries, meters, alerts, inventory, and telemetry
 - **Incremental sync**: Only fetches new data since last sync with configurable overlap buffer
-- **Rate limiting**: Complies with SolarEdge API limits (3 concurrent requests, 300/day)
+- **SolarEdge API V2 with OAuth**: One-time browser sign-in (`seh auth login`), automatic token refresh
+- **Rate limiting**: Paces requests to 10/minute and tracks the 2,000-credit monthly budget
 - **Retry with backoff**: Automatic retries with exponential backoff on transient failures
 - **Data export**: Export to CSV, JSON, Excel (.xlsx), or SQL dump
 - **Database views**: Pre-built views for common queries (8 views with `v_seh_` prefix)
@@ -31,7 +36,9 @@ Download your data from SolarEdge monitoring servers and store it in a relationa
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv) package manager
-- SolarEdge API key (from your monitoring portal)
+- A free app at [developer.solaredge.com](https://developer.solaredge.com/) with **Site Access**
+  and the redirect URI `http://127.0.0.1:8765/callback`
+- Your SolarEdge site ID (shown in the monitoring portal URL)
 - Relational database (SQLite, PostgreSQL, or MariaDB)
 
 
@@ -60,19 +67,23 @@ uv pip install openpyxl
 
 # 2. Configure
 cp .env.example .env
-# Edit .env and add your SEH_API_KEY and other items
+# Edit .env: SEH_OAUTH_CLIENT_ID, SEH_OAUTH_CLIENT_SECRET, SEH_SITE_IDS and other items
+chmod 600 .env
 
-# 3. Initialize database and verify API access
+# 3. Sign in to SolarEdge once (opens a browser; see 'seh auth --help' for servers)
+uv run seh auth login
+
+# 4. Initialize database and verify API access
 uv run seh init-db
 uv run seh check-api
 
-# 4. Run initial full sync
+# 5. Run initial full sync
 uv run seh sync
 
 # then do a --full to see the differences
 uv run seh sync --full
 
-# 5. Check status
+# 6. Check status
 uv run seh status
 
 # Full diagnostics (API health, DB status, rate limits)
@@ -91,16 +102,27 @@ Configuration is via environment variables or a `.env` file:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SEH_API_KEY` | SolarEdge API key (**required**) | - |
+| `SEH_OAUTH_CLIENT_ID` | Client ID of your developer.solaredge.com app (**required**) | - |
+| `SEH_OAUTH_CLIENT_SECRET` | Client secret of that app (**required**) | - |
+| `SEH_SITE_IDS` | Comma-separated site IDs to sync (**required**; V2 cannot list sites) | - |
+
+### Sign-in Settings
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SEH_TOKEN_FILE` | OAuth token file, written with owner-only permissions | `~/.config/seh/tokens.json` |
+| `SEH_OAUTH_REDIRECT_PORT` | Loopback port of the registered redirect URI | `8765` |
 
 ### API Settings
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SEH_API_BASE_URL` | API base URL | `https://monitoringapi.solaredge.com` |
+| `SEH_API_BASE_URL` | API base URL (must be https) | `https://monitoringapi.solaredge.com/v2` |
 | `SEH_API_TIMEOUT` | Request timeout in seconds | `10` |
 | `SEH_API_MAX_CONCURRENT` | Max concurrent requests | `3` |
-| `SEH_API_DAILY_LIMIT` | Max requests per day | `300` |
+| `SEH_API_PER_MINUTE_LIMIT` | Max requests per minute | `10` |
+| `SEH_API_MONTHLY_CREDITS` | Monthly API credit budget (1 credit per request) | `2000` |
+| `SEH_USAGE_FILE` | Monthly credit ledger shared by all seh processes | `~/.config/seh/usage.json` |
 
 ### Database Settings
 
@@ -112,12 +134,11 @@ Configuration is via environment variables or a `.env` file:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SEH_SITE_IDS` | Comma-separated site IDs to sync (syncs all if not set) | - |
 | `SEH_ENERGY_LOOKBACK_DAYS` | Days to look back for energy data on first sync | `365` |
 | `SEH_POWER_LOOKBACK_DAYS` | Days to look back for power data on first sync | `7` |
-| `SEH_POWER_DETAILS_LOOKBACK_DAYS` | Days to look back for powerDetails data on first sync (max 25 due to API limit) | `25` |
+| `SEH_POWER_DETAILS_LOOKBACK_DAYS` | Days to look back for the power breakdown on first sync | `25` |
 | `SEH_SYNC_OVERLAP_MINUTES` | Overlap buffer for incremental syncs | `15` |
-| `SEH_POWER_TIME_UNIT` | Power data granularity (QUARTER_OF_AN_HOUR, HOUR, DAY, WEEK, MONTH, YEAR) | `QUARTER_OF_AN_HOUR` |
+| `SEH_POWER_TIME_UNIT` | Power data resolution (QUARTER_HOUR, HOUR, DAY, WEEK, MONTH, YEAR; V1's QUARTER_OF_AN_HOUR is accepted) | `QUARTER_HOUR` |
 
 ### Error Handling Settings
 
@@ -441,21 +462,26 @@ uv run pytest tests/test_database_backends.py
 
 ## Troubleshooting
 
-### API Key Issues
+### Sign-in Issues
 
 ```
-Configuration error: api_key - Field required
+Not signed in (no token file at ...). Run 'seh auth login'.
+Token refresh rejected by SolarEdge ... Run 'seh auth login' to sign in again.
 ```
 
-Ensure `SEH_API_KEY` is set in your `.env` file or environment.
+Run `seh auth login`. A sign-in lapses if seh does not run for 30 days or after the
+24-month grant. `seh auth status --refresh` checks the stored sign-in without using
+API credits. If `SEH_API_KEY` is still set, seh reports that V1 keys no longer work.
 
-### Rate Limit Exceeded
+### Credit Budget Used
 
 ```
-RateLimitError: Daily API limit (300) reached
+RateLimitError: Monthly API credit budget used (2000/2000 for 2026-10) ...
 ```
 
-Wait until the next day or reduce sync frequency. The rate limiter tracks requests over a rolling 24-hour window.
+The Free tier allows 2,000 requests per calendar month (UTC) with no overage. A daily
+incremental sync uses about 10; a `--full` sync with the default 365-day energy lookback
+about 30. `seh status --diagnostics` shows the month's usage.
 
 ### Database Connection Errors
 
@@ -528,7 +554,37 @@ See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for the full roadmap. Key items
 - [x] Inventory sync
 - [x] Data export functionality (CSV, JSON)
 
+## Upgrading from v0.2 (API V1)
+
+1. Create an app at [developer.solaredge.com](https://developer.solaredge.com/) (Free tier,
+   Site Access, redirect URI `http://127.0.0.1:8765/callback`).
+2. In `.env`, remove `SEH_API_KEY`, `SEH_API_DAILY_LIMIT`, and add `SEH_OAUTH_CLIENT_ID`,
+   `SEH_OAUTH_CLIENT_SECRET`, `SEH_SITE_IDS`. Run `chmod 600 .env`.
+3. Run `uv sync`, then `seh auth login`. On a server without a browser, first run
+   `ssh -L 8765:127.0.0.1:8765 user@server` from your desktop and open the printed URL there.
+4. Run `seh sync`. Existing tables are reused; no database migration is needed.
+
+**Data differences in V2:**
+
+| Table | Change |
+|-------|--------|
+| `seh_power_details` | Same columns and 15-minute resolution; built from meter telemetry (consumption = production + import - export) |
+| `seh_inverter_telemetry` | 15-minute (was ~5-minute); no temperature, modes, DC voltage, power limit, or reactive power |
+| `seh_optimizer_telemetry` | No V2 endpoint; not collected |
+| `seh_environmental_benefits` | CO2 only; trees, light bulbs, SO2, NOx keep their last V1 values |
+| `seh_inventory` | Now includes optimizers (`category = 'optimizers'`) |
+| `seh_sites`, `seh_equipment` | V1-only fields (currency, primary module, DSP versions) keep their last V1 values |
+
 ## Changelog
+
+### v0.3.0 (2026-10-13)
+- Migrated to the SolarEdge Monitoring API V2 (V1 retired 2026-11-01)
+- OAuth2 Site Access: `seh auth login|status|logout`, rotating refresh tokens stored with owner-only permissions
+- Rate limiting by minute (10) and monthly credit budget (2,000) with a persistent ledger
+- Power details derived from meter telemetry; power flow, energy, power, inventory (now with optimizers) on V2
+- Incremental syncs resume from the newest stored reading, fixing partial last intervals left by V1
+- Endpoints a plan does not include (HTTP 400/403/404) are recorded as skipped
+- Removed `SEH_API_KEY` and `SEH_API_DAILY_LIMIT`
 
 ### v0.2.0 (2026-03-13)
 - Added `seh_power_details` table: historical 15-minute power breakdown (production, consumption, self-consumption, feed-in, purchased) from the `powerDetails` API endpoint
@@ -555,7 +611,8 @@ MIT
 
 ## Resources
 
-- [SolarEdge Monitoring API Documentation](https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf)
+- [SolarEdge API V2 Documentation](https://api-docs.solaredge.com/)
+- [SolarEdge Developer Platform](https://developer.solaredge.com/)
 - [SolarEdge Monitoring Portal](https://monitoring.solaredge.com/)
 
 - 

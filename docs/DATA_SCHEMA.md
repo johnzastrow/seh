@@ -295,7 +295,7 @@ Power flow snapshots showing energy distribution between PV, grid, load, and sto
 
 ### seh_power_details
 
-Historical 15-minute time-series of five power meter types from the SolarEdge `powerDetails` API endpoint. All values are stored in **Watts** (W).
+Historical 15-minute time-series of five power series. All values are stored in **Watts** (W). Since v0.3.0 (API V2) production, purchased (import), and feed-in (export) come from meter telemetry; consumption = production + purchased - feed-in and self-consumption = production - feed-in.
 
 | Column | Type | Nullable | Description |
 |--------|------|----------|-------------|
@@ -313,7 +313,7 @@ Historical 15-minute time-series of five power meter types from the SolarEdge `p
 **Unique Constraints:** `(site_id, timestamp)` named `uq_power_details`
 **Indexes:** `site_id`, `timestamp`
 
-**API Source:** `GET /site/{id}/powerDetails` — limited to strictly less than 1 calendar month per request (25-day chunks used internally).
+**API Source:** `GET /v2/sites/{id}/meters/telemetry?resolution=QUARTER_HOUR` (1-week windows). Before v0.3.0: V1 `GET /site/{id}/powerDetails`.
 
 **Unit note:** The chart layer (`seh_weekly_power_chart.py`) converts W → kW for display.
 
@@ -772,5 +772,6 @@ All child tables use `ON DELETE CASCADE` for the site relationship, meaning dele
 
 | Date | Version | Change |
 |------|---------|--------|
+| 2026-10-13 | 0.3.0 | Migrated to API V2: power details from meter telemetry; inverter telemetry at 15-minute resolution without temperature/mode/DC voltage/power limit/reactive power; optimizer telemetry no longer collected; environmental benefits CO2 only; inventory adds optimizers; sync status `skipped` for unavailable endpoints |
 | 2026-03-13 | 0.2.0 | Added `seh_power_details` table (15-min historical power breakdown from `powerDetails` API endpoint); added `power_details` sync strategy; updated ERD to Mermaid format |
 | 2026-01 | 0.1.x | Initial schema with 14 tables |

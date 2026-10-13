@@ -4,9 +4,10 @@ SolarEdge Harvest (seh) downloads data from SolarEdge solar monitoring servers
 and stores it in a relational database (SQLite, PostgreSQL, or MariaDB).
 
 Environment Variables:
-    SEH_API_KEY          SolarEdge monitoring API key (required)
+    SEH_OAUTH_CLIENT_ID      OAuth client ID of your developer.solaredge.com app (required)
+    SEH_OAUTH_CLIENT_SECRET  OAuth client secret of that app (required)
+    SEH_SITE_IDS             Comma-separated site IDs to sync (required)
     SEH_DATABASE_URL     Database connection URL (default: sqlite:///./seh.db)
-    SEH_SITE_IDS         Comma-separated list of site IDs to sync (optional)
     SEH_LOG_LEVEL        Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
     SEH_LOG_FILE         Log file path (optional, logs to console if not set)
 
@@ -24,6 +25,8 @@ import click
 from rich.console import Console
 from rich.table import Table
 
+from seh import __version__
+
 console = Console()
 
 
@@ -39,16 +42,22 @@ energy production, power readings, equipment data, and more into a local or
 remote database for analysis and reporting.
 
 QUICK START:
-  1. Create a .env file with your API key:
-     SEH_API_KEY=your_api_key_here
+  1. Create an app with Site Access at https://developer.solaredge.com/
+     (redirect URI http://127.0.0.1:8765/callback), then add to .env:
+     SEH_OAUTH_CLIENT_ID=...
+     SEH_OAUTH_CLIENT_SECRET=...
+     SEH_SITE_IDS=1234567
 
-  2. Initialize the database:
+  2. Sign in once (see 'seh auth --help' for headless servers):
+     seh auth login
+
+  3. Initialize the database:
      seh init-db
 
-  3. Check API connectivity:
+  4. Check API connectivity:
      seh check-api
 
-  4. Sync data from SolarEdge:
+  5. Sync data from SolarEdge:
      seh sync
 
 EXAMPLES:
@@ -78,7 +87,15 @@ CONFIGURATION:
   You can use a .env file or set them directly in your environment.
 
   Required:
-    SEH_API_KEY            Your SolarEdge API key
+    SEH_OAUTH_CLIENT_ID     OAuth client ID (developer.solaredge.com app)
+    SEH_OAUTH_CLIENT_SECRET OAuth client secret
+    SEH_SITE_IDS            Comma-separated site IDs (V2 cannot list sites)
+
+  Sign-in and API budget:
+    SEH_TOKEN_FILE          OAuth token file (default: ~/.config/seh/tokens.json)
+    SEH_USAGE_FILE          API credit ledger (default: ~/.config/seh/usage.json)
+    SEH_API_MONTHLY_CREDITS Monthly credit budget (default: 2000, Free tier)
+    SEH_API_PER_MINUTE_LIMIT  Calls per minute (default: 10, Free tier)
 
   Database:
     SEH_DATABASE_URL       Connection URL (default: sqlite:///./seh.db)
@@ -87,13 +104,12 @@ CONFIGURATION:
                            - mariadb+mariadbconnector://user:pass@host:3306/db
 
   Sync options:
-    SEH_SITE_IDS           Comma-separated site IDs to sync (syncs all if not set)
     SEH_SKIP_DATA_TYPES    Comma-separated data types to skip (e.g., meter,alert)
                            Run 'seh check-api' to auto-detect unavailable endpoints
     SEH_ENERGY_LOOKBACK_DAYS   Days of energy data for first sync (default: 365)
     SEH_POWER_LOOKBACK_DAYS    Days of power data for first sync (default: 7)
-    SEH_POWER_TIME_UNIT        Power data granularity (default: QUARTER_OF_AN_HOUR)
-                               Options: QUARTER_OF_AN_HOUR, HOUR, DAY, WEEK, MONTH, YEAR
+    SEH_POWER_TIME_UNIT        Power data resolution (default: QUARTER_HOUR)
+                               Options: QUARTER_HOUR, HOUR, DAY, WEEK, MONTH, YEAR
 
   Error handling:
     SEH_ERROR_HANDLING     Mode: strict, lenient, skip (default: lenient)
@@ -120,7 +136,7 @@ SCHEDULING:
     */15 6-20 * * * /path/to/seh sync
 
 MORE INFORMATION:
-  API Documentation: https://knowledge-center.solaredge.com/sites/kc/files/se_monitoring_api.pdf
+  API Documentation: https://api-docs.solaredge.com/
   GitHub: https://github.com/your-repo/seh
 """
 
@@ -165,16 +181,15 @@ DATA TYPES SYNCED:
   - Storage: Battery status and telemetry
   - Meters: Revenue-grade meter data
   - Alerts: System alerts and notifications
-  - Environmental: CO2 savings, trees planted equivalents
+  - Environmental: CO2 avoided
 
-API RATE LIMITS:
-  SolarEdge enforces these limits:
-  - 3 concurrent API requests maximum
-  - 300 requests per account per day
-  - 10 second timeout per request
+API LIMITS (SolarEdge API V2, Free tier):
+  - 2000 credits per calendar month (1 credit per request, no overage)
+  - 10 requests per minute
 
-  SEH respects these limits automatically. If you hit the daily limit,
-  wait until the next day or contact SolarEdge for a higher quota.
+  SEH paces requests automatically and keeps a monthly credit count in
+  SEH_USAGE_FILE; it stops before the budget is exceeded. A daily
+  incremental sync uses about 10 credits. See 'seh status --diagnostics'.
 """
 
 STATUS_HELP = """
@@ -350,7 +365,7 @@ def parse_site_ids(sites_str: str | None) -> list[int] | None:
     is_flag=True,
     help="Enable verbose output (sets log level to DEBUG).",
 )
-@click.version_option(version="0.2.0", prog_name="seh")
+@click.version_option(version=__version__, prog_name="seh")
 @click.pass_context
 def cli(ctx: click.Context, config: str | None, verbose: bool) -> None:
     """SolarEdge Harvest - Download SolarEdge data to a database."""
@@ -668,7 +683,7 @@ def check_api(ctx: click.Context, probe: bool, update_config: bool) -> None:
                         else:
                             console.print("\n[yellow]Skipped .env update[/yellow]")
 
-                    console.print("\n[dim]Tip: Run 'seh check-api' again after API key changes to reassess.[/dim]")
+                    console.print("\n[dim]Tip: Run 'seh check-api' again after SolarEdge plan changes to reassess.[/dim]")
                 else:
                     console.print("\n[dim]All failing endpoints already in skip list.[/dim]")
             else:

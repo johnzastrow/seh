@@ -1,8 +1,9 @@
 # Handoff: SolarEdge Monitoring API V1 -> V2 Migration
 
 **Status as of 2026-10-12:** Investigation complete. OAuth sign-in and all endpoints below
-verified against a live homeowner site with `scripts/probe_v2.py` (see sections 2 and 3). seh itself
-is not yet changed.
+verified against a live homeowner site with `scripts/probe_v2.py` (see sections 2 and 3).
+**Implemented in v0.3.0** (stories 1-7 of section 5); validated against the production V1
+database (energy, power, and power details match). Remaining: deployment to lamp.lan.
 **Hard deadline:** V1 is retired **2026-11-01** (per SolarEdge's own V1 error body:
 "The V1 Monitoring API is retired on 2026-11-01. This is a scheduled window, not an outage.").
 Some community sources say 2026-11-03; plan for the earlier date. SolarEdge support has
