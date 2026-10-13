@@ -86,6 +86,12 @@ class BaseSyncStrategy(ABC):
             status: Sync status.
             error_message: Error message if failed.
         """
+        if last_data_timestamp is None:
+            # Never erase the high-water mark: after an error or an empty fetch the next
+            # incremental sync must resume where data ends, not re-fetch the full lookback
+            # (which would spend API credits on data already stored).
+            last_data_timestamp = self.get_last_sync(site_id)
+
         self.sync_metadata_repo.upsert(
             site_id=site_id,
             data_type=self.data_type,

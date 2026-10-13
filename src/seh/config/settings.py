@@ -116,9 +116,9 @@ class Settings(BaseSettings):
         default=15,
         description="Overlap buffer in minutes for incremental syncs",
     )
-    power_time_unit: Literal["QUARTER_OF_AN_HOUR", "HOUR", "DAY", "WEEK", "MONTH", "YEAR"] = Field(
-        default="QUARTER_OF_AN_HOUR",
-        description="Time unit for power data (QUARTER_OF_AN_HOUR is 15-min intervals)",
+    power_time_unit: Literal["QUARTER_HOUR", "HOUR", "DAY", "WEEK", "MONTH", "YEAR"] = Field(
+        default="QUARTER_HOUR",
+        description="V2 resolution for power data (QUARTER_HOUR is 15-min intervals)",
     )
 
     # Error Handling Configuration
@@ -218,6 +218,12 @@ class Settings(BaseSettings):
             "optimizer_telemetry",
         }
     )
+
+    @field_validator("power_time_unit", mode="before")
+    @classmethod
+    def _v1_time_unit_alias(cls, value: object) -> object:
+        """Accept the V1 name so existing .env files keep working."""
+        return "QUARTER_HOUR" if value == "QUARTER_OF_AN_HOUR" else value
 
     @field_validator("api_base_url", "oauth_authorize_url", "oauth_token_url", "oauth_revoke_url")
     @classmethod

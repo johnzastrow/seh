@@ -182,3 +182,15 @@ class TestSettingsFromEnv:
 
         settings = make_settings()
         assert settings.oauth_client_id is None
+
+
+class TestPowerTimeUnit:
+    def test_default_is_v2_quarter_hour(self, clean_env):
+        assert make_settings().power_time_unit == "QUARTER_HOUR"
+
+    def test_v1_name_is_accepted(self, clean_env):
+        assert make_settings(power_time_unit="QUARTER_OF_AN_HOUR").power_time_unit == "QUARTER_HOUR"
+
+    def test_unknown_unit_is_rejected(self, clean_env):
+        with pytest.raises(ValidationError):
+            make_settings(power_time_unit="FIVE_MINUTES")

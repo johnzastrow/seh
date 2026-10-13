@@ -1,23 +1,34 @@
-"""Tests for sync strategies migrated to SolarEdge API V2 (site, equipment, inventory,
-environmental, alerts) and the orchestrator's V2 behaviour.
+"""Tests for sync strategies on SolarEdge API V2 and the orchestrator's V2 behaviour.
 
 Fixtures mirror response shapes observed from the live V2 API on 2026-10-12, with
 synthetic values.
 """
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pytest
 from sqlalchemy import select
 
-from seh.db.models import Alert, EnvironmentalBenefits, Equipment, InventoryItem, Site, SyncMetadata
+from seh.db.models import (
+    Alert,
+    EnergyReading,
+    EnvironmentalBenefits,
+    Equipment,
+    InventoryItem,
+    PowerFlow,
+    PowerReading,
+    Site,
+    SyncMetadata,
+)
 from seh.sync.orchestrator import SyncOrchestrator
 from seh.sync.strategies.alert import AlertSyncStrategy
+from seh.sync.strategies.energy import EnergySyncStrategy
 from seh.sync.strategies.environmental import EnvironmentalSyncStrategy
 from seh.sync.strategies.equipment import EquipmentSyncStrategy
 from seh.sync.strategies.inventory import InventorySyncStrategy
+from seh.sync.strategies.power import PowerSyncStrategy, _activity
 from seh.sync.strategies.site import SiteSyncStrategy
 from seh.sync.v2_fields import calendar_date, site_local, title_case, utc_to_site_local
 from seh.utils.exceptions import APIError, AuthenticationError
@@ -382,3 +393,160 @@ class TestOrchestrator:
         assert "environmental" in result.errors
         assert result.records_synced["alert"] == 0
         client.get_alerts.assert_awaited_once()
+
+
+# --- power, power flow, energy (story 6b) ------------------------------------------------
+
+
+def power_series(*points: tuple[str, float | None]) -> list[dict]:
+    return [{"timestamp": t, "value": v} for t, v in points]
+
+
+V2_POWER_FLOW = {
+    "updatedAt": "2026-10-12T18:01:51.308-04:00",
+    "refreshRate": 3,
+    "unit": "kW",
+    "pv": {"active": False, "power": 0.0},
+    "load": {"active": True, "power": 1.79},
+    "storage": {"active": False, "power": None, "status": None, "chargeLevel": None},
+    "grid": {"active": True, "power": 1.79, "status": "IMPORT"},
+}
+
+
+class TestPowerSync:
+    async def test_stores_readings_in_site_local_time(self, test_session, test_settings, site):
+        client = client_with(
+            get_power=power_series(
+                ("2026-10-12T06:00:00-04:00", 0.0),
+                ("2026-10-12T12:15:00-04:00", 10024.0),
+                ("2026-10-12T12:30:00-04:00", None),  # interval without data yet
+            ),
+            get_power_flow={},
+        )
+
+        count = await PowerSyncStrategy(client, test_session, test_settings).sync(
+            SITE_ID, full=True
+        )
+
+        assert count == 2
+        rows = test_session.scalars(select(PowerReading).order_by(PowerReading.timestamp)).all()
+        assert [(r.timestamp, r.power_watts) for r in rows] == [
+            (datetime(2026, 10, 12, 6, 0), 0.0),
+            (datetime(2026, 10, 12, 12, 15), 10024.0),
+        ]
+        assert metadata(test_session, "power").last_data_timestamp == datetime(2026, 10, 12, 12, 15)
+
+    async def test_full_sync_requests_lookback_at_configured_resolution(
+        self, test_session, test_settings, site
+    ):
+        client = client_with(get_power=[], get_power_flow={})
+        await PowerSyncStrategy(client, test_session, test_settings).sync(SITE_ID, full=True)
+
+        _site, start, end = client.get_power.await_args.args
+        assert client.get_power.await_args.kwargs == {"resolution": "QUARTER_HOUR"}
+        assert timedelta(days=6, hours=23) < end - start <= timedelta(days=7, seconds=1)
+
+    async def test_incremental_sync_resumes_from_last_reading(
+        self, test_session, test_settings, site
+    ):
+        client = client_with(
+            get_power=power_series(("2026-10-12T12:15:00-04:00", 1.0)), get_power_flow={}
+        )
+        strategy = PowerSyncStrategy(client, test_session, test_settings)
+        await strategy.sync(SITE_ID, full=True)
+
+        await strategy.sync(SITE_ID)
+
+        _site, start, _end = client.get_power.await_args.args
+        assert start == datetime(2026, 10, 12, 12, 0)  # last reading minus 15 min overlap
+
+    async def test_stores_power_flow_snapshot(self, test_session, test_settings, site):
+        client = client_with(get_power=[], get_power_flow=V2_POWER_FLOW)
+
+        await PowerSyncStrategy(client, test_session, test_settings).sync(SITE_ID, full=True)
+
+        flow = test_session.scalars(select(PowerFlow)).one()
+        assert flow.timestamp == datetime(2026, 10, 12, 18, 1, 51, 308000)
+        assert flow.unit == "kW"
+        assert (flow.pv_status, flow.pv_power) == ("Idle", 0.0)
+        assert (flow.load_status, flow.load_power) == ("Active", 1.79)
+        assert (flow.grid_status, flow.grid_power) == ("Active", 1.79)
+        assert flow.storage_status is None
+
+    @pytest.mark.parametrize(
+        ("component", "expected"),
+        [
+            ({"active": True, "power": 2.5}, "Active"),
+            ({"active": True, "power": 0.0}, "Idle"),  # PV at night: V2 still says active
+            ({"active": False, "power": None}, "Idle"),
+            ({}, None),
+        ],
+    )
+    def test_status_matches_v1_meaning(self, component, expected):
+        assert _activity(component) == expected
+
+    async def test_power_flow_failure_does_not_fail_power_sync(
+        self, test_session, test_settings, site
+    ):
+        client = client_with(
+            get_power=power_series(("2026-10-12T12:15:00-04:00", 5.0)),
+            get_power_flow=APIError("Authorization Failed", status_code=403),
+        )
+        assert await PowerSyncStrategy(client, test_session, test_settings).sync(SITE_ID) == 1
+
+
+class TestEnergySync:
+    async def test_stores_daily_energy(self, test_session, test_settings, site):
+        client = client_with(
+            get_energy=power_series(
+                ("2026-10-11T00:00:00-04:00", 18292.0),
+                ("2026-10-12T00:00:00-04:00", 36939.0),
+                ("2026-10-13T00:00:00-04:00", None),
+            )
+        )
+
+        count = await EnergySyncStrategy(client, test_session, test_settings).sync(
+            SITE_ID, full=True
+        )
+
+        assert count == 2
+        rows = test_session.scalars(
+            select(EnergyReading).order_by(EnergyReading.reading_date)
+        ).all()
+        assert [(r.reading_date, r.time_unit, r.energy_wh) for r in rows] == [
+            (date(2026, 10, 11), "DAY", 18292.0),
+            (date(2026, 10, 12), "DAY", 36939.0),
+        ]
+        assert metadata(test_session, "energy").last_data_timestamp == datetime(2026, 10, 12)
+
+    async def test_requests_through_end_of_today(self, test_session, test_settings, site):
+        client = client_with(get_energy=[])
+        await EnergySyncStrategy(client, test_session, test_settings).sync(SITE_ID, full=True)
+
+        _site, start, end = client.get_energy.await_args.args
+        assert end == date.today() + timedelta(days=1)
+        assert start == date.today() - timedelta(days=test_settings.energy_lookback_days)
+        assert client.get_energy.await_args.kwargs == {"resolution": "DAY"}
+
+
+class TestBaseStrategy:
+    def test_start_time_without_history_uses_lookback(self, test_session, test_settings, site):
+        strategy = EnergySyncStrategy(AsyncMock(), test_session, test_settings)
+        assert strategy.get_last_sync(SITE_ID) is None
+        days_ago = (datetime.now() - strategy.get_start_time(SITE_ID, lookback_days=7)).days
+        assert 6 <= days_ago <= 7
+
+    async def test_error_keeps_high_water_mark(self, test_session, test_settings, site):
+        client = client_with(
+            get_power=power_series(("2026-10-12T12:15:00-04:00", 1.0)), get_power_flow={}
+        )
+        strategy = PowerSyncStrategy(client, test_session, test_settings)
+        await strategy.sync(SITE_ID, full=True)
+
+        client.get_power.side_effect = APIError("Scheduled window", status_code=503)
+        with pytest.raises(APIError):
+            await strategy.sync(SITE_ID)
+
+        meta = metadata(test_session, "power")
+        assert meta.status == "error"
+        assert meta.last_data_timestamp == datetime(2026, 10, 12, 12, 15)
